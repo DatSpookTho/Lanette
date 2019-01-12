@@ -45,6 +45,8 @@ export class Game extends Activity {
 	activityType: string = 'game';
 	commands = Object.assign(Object.create(null), globalGameCommands);
 	customizableOptions: Dict<{min: number, base: number, max: number}> = Object.create(null);
+	loserPointsToBits: number = 10;
+	maxBits: number = 1000;
 	namePrefixes: string[] = [];
 	nameSuffixes: string[] = [];
 	nameWithOptions: string = '';
@@ -52,6 +54,8 @@ export class Game extends Activity {
 	parentGame: Game | null = null;
 	round: number = 0;
 	signupsTime: number = 0;
+	userHosted: boolean = false;
+	winnerPointsToBits: number = 50;
 	winners = new Map<Player, number>();
 
 	// set immediately in initialize()
@@ -59,6 +63,7 @@ export class Game extends Activity {
 	format!: IGameFormat;
 	inputOptions!: Dict<number>;
 
+	allowChildGameBits?: boolean | null;
 	defaultOptions?: DefaultGameOptions[];
 	isMiniGame?: boolean;
 	mascot?: IPokemonCopy;
@@ -71,6 +76,7 @@ export class Game extends Activity {
 		this.inputOptions = this.format.inputOptions;
 		this.name = format.name;
 		this.id = format.id;
+		this.uhtmlId = 'scripted-' + format.id;
 		this.description = format.description;
 
 		if (format.commands) Object.assign(this.commands, format.commands);
@@ -139,21 +145,32 @@ export class Game extends Activity {
 	}
 
 	deallocate() {
-		this.room.game = null;
+		if (this.onDeallocate) this.onDeallocate();
+		if (this.userHosted) {
+			this.room.userHostedGame = null;
+		} else {
+			this.room.game = null;
+		}
+
+		if (this.parentGame) {
+			this.room.game = this.parentGame;
+			if (this.parentGame.onChildEnd) this.parentGame.onChildEnd(this.winners);
+		}
 	}
 
 	forceEnd(user: User) {
 		if (this.timeout) clearTimeout(this.timeout);
-		this.say("The " + this.name + " " + this.activityType + " was forcibly ended.");
+		this.say((!this.userHosted ? "The " : "") + this.nameWithOptions + " " + this.activityType + " was forcibly ended.");
 		if (this.onForceEnd) this.onForceEnd(user);
 		this.deallocate();
 	}
 
 	signups() {
-		// TODO: check internal/userhosted/custom signups
+		// TODO: check internal/custom signups
 		this.showSignupsHtml = true;
 		this.sayUhtml(this.getSignupsHtml(), "signups");
 		this.signupsTime = Date.now();
+		if (!this.userHosted && this.shinyMascot) this.say(this.mascot!.name + " is shiny so bits will be doubled!");
 		if (this.onSignups) this.onSignups();
 		if (this.options.freejoin) {
 			this.started = true;
@@ -177,7 +194,8 @@ export class Game extends Activity {
 		const player = this.createPlayer(user);
 		if (!player) return;
 		if (this.onAddPlayer && !this.onAddPlayer(player)) return;
-		player.say("Thanks for joining the " + this.name + " " + this.activityType + "!");
+		const bits = this.addBits(player, 10, true);
+		player.say("Thanks for joining the " + this.name + " " + this.activityType + "!" + (bits ? " Have some free bits!" : ""));
 		if (this.getSignupsHtml && this.showSignupsHtml && !this.started && !this.signupsHtmlTimeout) {
 			this.sayUhtmlChange(this.getSignupsHtml(), "signups");
 			this.signupsHtmlTimeout = setTimeout(() => {
@@ -191,6 +209,7 @@ export class Game extends Activity {
 		const player = this.destroyPlayer(user);
 		if (!player) return;
 		if (this.onRemovePlayer) this.onRemovePlayer(player);
+		this.removeBits(player, 10, true);
 		player.say("You have left the " + this.name + " " + this.activityType + ".");
 		if (this.getSignupsHtml && this.showSignupsHtml && !this.started && !this.signupsHtmlTimeout) {
 			this.sayUhtmlChange(this.getSignupsHtml(), "signups");
@@ -211,10 +230,11 @@ export class Game extends Activity {
 					this.shinyMascot = false;
 				}
 			}
-			const gif = Dex.getPokemonGif(this.mascot);
+			const gif = Dex.getPokemonGif(this.mascot, this.userHosted ? 'back' : 'front');
 			if (gif) html += gif + "&nbsp;&nbsp;&nbsp;";
 		}
-		html += "<b><font size='3'>" + this.nameWithOptions + "</font></b><br />" + this.description;
+		html += "<b><font size='3'>" + this.nameWithOptions + "</font></b>";
+		html += "<br />" + this.description;
 		let commandDescriptions: string[] = [];
 		if (this.getPlayerSummary) commandDescriptions.push(Config.commandCharacter + "summary");
 		if (this.format.commandDescriptions) commandDescriptions = commandDescriptions.concat(this.format.commandDescriptions);
@@ -228,11 +248,44 @@ export class Game extends Activity {
 			if (this.started) {
 				html += "<br /><br /><b>The game has started!</b>";
 			} else {
-				html += "<br /><button class='button' name='send' value='/pm " + Users.self.name + ", .joingame " + this.room.id + "'>Join</button>";
+				html += "<br /><button class='button' name='send' value='/pm " + Users.self.name + ", " + Config.commandCharacter + "joingame " + this.room.id + "'>Join</button>";
 			}
 		}
 		html += "</center></div>";
 		return html;
+	}
+
+	addBits(user: User | Player, bits: number, noPm?: boolean): boolean {
+		if (this.parentGame && !this.parentGame.allowChildGameBits) return false;
+		if (this.shinyMascot) bits *= 2;
+		Storage.addPoints(this.room, user.name, bits, this.format.id);
+		if (!noPm) user.say("You were awarded " + bits + " bits! To see your total amount, use the command ``" + Config.commandCharacter + "bits " + this.room.id + "``.");
+		return true;
+	}
+
+	removeBits(user: User | Player, bits: number, noPm?: boolean): boolean {
+		if (this.parentGame && !this.parentGame.allowChildGameBits) return false;
+		if (this.shinyMascot) bits *= 2;
+		Storage.removePoints(this.room, user.name, bits, this.format.id);
+		if (!noPm) user.say("You lost " + bits + " bits! To see your remaining amount, use the command ``" + Config.commandCharacter + "bits " + this.room.id + "``.");
+		return true;
+	}
+
+	convertPointsToBits(winnerBits?: number, loserBits?: number) {
+		if (this.parentGame && !this.parentGame.allowChildGameBits) return;
+		if (!this.points) throw new Error(this.name + " called convertPointsToBits() with no points Map");
+		if (!winnerBits) winnerBits = this.winnerPointsToBits;
+		if (!loserBits) loserBits = this.loserPointsToBits;
+		this.points.forEach((points, player) => {
+			let winnings = 0;
+			if (this.winners.has(player)) {
+				winnings = Math.floor(winnerBits! * points);
+			} else {
+				winnings = Math.floor(loserBits! * points);
+			}
+			if (winnings > this.maxBits) winnings = this.maxBits;
+			if (winnings) this.addBits(player, winnings);
+		});
 	}
 
 	rollForShinyPokemon(extraChance?: number): boolean {
@@ -253,6 +306,8 @@ export class Game extends Activity {
 	getPlayerSummary?(player: Player): void;
 	/** Return `false` to prevent a user from being added (must destroy player) */
 	onAddPlayer?(player: Player): boolean;
+	onChildEnd?(winners: Map<Player, number>): void;
+	onDeallocate?(): void;
 	onInitialize?(): void;
 	onNextRound?(): void;
 	onRemovePlayer?(player: Player): void;

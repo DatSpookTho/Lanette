@@ -5,6 +5,10 @@ global.Tools = new tools.Tools();
 import * as config from './config';
 global.Config = config;
 
+Config.rooms = Config.rooms.map(x => Tools.toRoomId(x));
+Config.developers = Config.developers.map(x => Tools.toId(x));
+Config.allowScriptedGames = Config.allowScriptedGames.map(x => Tools.toRoomId(x));
+
 import * as client from './client';
 global.Client = new client.Client();
 
@@ -22,6 +26,9 @@ global.Games = new games.Games();
 
 import * as rooms from './rooms';
 global.Rooms = new rooms.Rooms();
+
+import * as storage from './storage';
+global.Storage = new storage.Storage();
 
 import * as tournaments from './tournaments';
 global.Tournaments = new tournaments.Tournaments();

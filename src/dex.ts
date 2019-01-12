@@ -443,7 +443,7 @@ export class Dex {
 	getAbility(name: string): IAbility | null {
 		let id = Tools.toId(name);
 		if (!id) return null;
-		if (this.data.aliases.hasOwnProperty(id)) id = this.data.aliases[id]!;
+		if (this.data.aliases.hasOwnProperty(id)) id = Tools.toId(this.data.aliases[id]);
 		if (!this.data.abilities.hasOwnProperty(id)) return null;
 
 		const cached = this.abilityCache.get(id);
@@ -486,7 +486,7 @@ export class Dex {
 	getItem(name: string): IItem | null {
 		let id = Tools.toId(name);
 		if (!id) return null;
-		if (this.data.aliases.hasOwnProperty(id)) id = this.data.aliases[id]!;
+		if (this.data.aliases.hasOwnProperty(id)) id = Tools.toId(this.data.aliases[id]);
 		if (!this.data.items.hasOwnProperty(id)) return null;
 
 		const cached = this.itemCache.get(id);
@@ -541,7 +541,7 @@ export class Dex {
 	getMove(name: string): IMove | null {
 		let id = Tools.toId(name);
 		if (!id) return null;
-		if (this.data.aliases.hasOwnProperty(id)) id = this.data.aliases[id]!;
+		if (this.data.aliases.hasOwnProperty(id)) id = Tools.toId(this.data.aliases[id]);
 		if (!this.data.moves.hasOwnProperty(id)) return null;
 
 		const cached = this.moveCache.get(id);
@@ -594,7 +594,7 @@ export class Dex {
 	getPokemon(name: string): IPokemon | null {
 		let id = Tools.toId(name);
 		if (!id) return null;
-		if (this.data.aliases.hasOwnProperty(id)) id = this.data.aliases[id]!;
+		if (this.data.aliases.hasOwnProperty(id)) id = Tools.toId(this.data.aliases[id]);
 		if (!this.data.pokedex.hasOwnProperty(id)) return null;
 
 		const cached = this.pokemonCache.get(id);
@@ -680,7 +680,7 @@ export class Dex {
 	getFormat(name: string): IFormat | null {
 		let id = Tools.toId(name);
 		if (!id) return null;
-		if (this.data.aliases.hasOwnProperty(id)) id = this.data.aliases[id]!;
+		if (this.data.aliases.hasOwnProperty(id)) id = Tools.toId(this.data.aliases[id]);
 		if (!this.data.formats.hasOwnProperty(id)) return null;
 		// data computed in includeFormats();
 		return Object.assign({}, this.data.formats[id]);
@@ -867,16 +867,29 @@ export class Dex {
 		return matches[0];
 	}
 
-	getPokemonGif(species: IPokemon | string, width?: number, height?: number): string {
+	getPokemonGif(species: IPokemon | string, direction?: 'front' | 'back', width?: number, height?: number): string {
 		const pokemon = typeof species === 'string' ? this.getPokemon(species) : species;
 		if (!pokemon) return '';
-		let prefix = "//play.pokemonshowdown.com/sprites/xyani/";
-		if (pokemon.shiny) prefix = "//play.pokemonshowdown.com/sprites/xyani-shiny/";
+		if (!direction) direction = 'front';
+		let prefix = '';
+		if (direction === 'front') {
+			if (pokemon.shiny) {
+				prefix = "//play.pokemonshowdown.com/sprites/xyani-shiny/";
+			} else {
+				prefix = "//play.pokemonshowdown.com/sprites/xyani/";
+			}
+		} else {
+			if (pokemon.shiny) {
+				prefix = "//play.pokemonshowdown.com/sprites/xyani-back-shiny/";
+			} else {
+				prefix = "//play.pokemonshowdown.com/sprites/xyani-back/";
+			}
+		}
 		let gif = '<img src="' + prefix + pokemon.spriteId + '.gif" ';
 		if (width && height) {
 			gif += 'width="' + width + '" height="' + height + '"';
-		} else if (this.data.gifData.hasOwnProperty(pokemon.speciesId) && this.data.gifData[pokemon.speciesId]!.front) {
-			const data = this.data.gifData[pokemon.speciesId]!.front!;
+		} else if (this.data.gifData.hasOwnProperty(pokemon.speciesId) && this.data.gifData[pokemon.speciesId]![direction]) {
+			const data = this.data.gifData[pokemon.speciesId]![direction]!;
 			gif += 'width="' + data.w + '" height="' + data.h + '"';
 		}
 		gif += ' />';
@@ -905,6 +918,7 @@ export class Dex {
 
 		const top = Math.floor(num / 12) * 30;
 		const left = (num % 12) * 40;
-		return '<span style="display: inline-block;width: 40px;height: 30px;background:transparent url(https://play.pokemonshowdown.com/sprites/smicons-sheet.png?a5) no-repeat scroll -' + left + 'px -' + top + 'px"></span>';
+		const facingLeftStyle = facingLeft ? "transform:scaleX(-1);webkit-transform:scaleX(-1);" : "";
+		return '<span style="display: inline-block;width: 40px;height: 30px;background:transparent url(https://play.pokemonshowdown.com/sprites/smicons-sheet.png?a5) no-repeat scroll -' + left + 'px -' + top + 'px;' + facingLeftStyle + '"></span>';
 	}
 }
