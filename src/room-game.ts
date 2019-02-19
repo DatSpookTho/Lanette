@@ -1,5 +1,6 @@
 import { ICommandDefinition } from "./command-parser";
 import { Activity, Player } from "./room-activity";
+import { Room } from "./rooms";
 import { IGameFormat } from "./types/games";
 import { IPokemonCopy } from "./types/in-game-data-types";
 import { User } from "./users";
@@ -63,13 +64,17 @@ export class Game extends Activity {
 	format!: IGameFormat;
 	inputOptions!: Dict<number>;
 
-	allowChildGameBits?: boolean | null;
+	allowChildGameBits?: boolean;
 	defaultOptions?: DefaultGameOptions[];
 	isMiniGame?: boolean;
 	mascot?: IPokemonCopy;
 	points?: Map<Player, number>;
 	shinyMascot?: boolean;
 	variant?: string;
+
+	isUserHosted(room: Room | User): room is Room {
+		return this.userHosted;
+	}
 
 	initialize(format: IGameFormat) {
 		this.format = format;
@@ -126,7 +131,7 @@ export class Game extends Activity {
 			this.options[i] = this.customizableOptions[i].base;
 		}
 		for (const i in this.inputOptions) {
-			if (!(i in this.customizableOptions) || (i === 'points' && this.isMiniGame) || this.inputOptions[i] === this.options[i]) {
+			if (!(i in this.customizableOptions) || this.inputOptions[i] === this.options[i]) {
 				delete this.inputOptions[i];
 				continue;
 			}
@@ -146,7 +151,7 @@ export class Game extends Activity {
 
 	deallocate() {
 		if (this.onDeallocate) this.onDeallocate();
-		if (this.userHosted) {
+		if (this.isUserHosted(this.room)) {
 			this.room.userHostedGame = null;
 		} else {
 			this.room.game = null;
@@ -167,8 +172,10 @@ export class Game extends Activity {
 
 	signups() {
 		// TODO: check internal/custom signups
-		this.showSignupsHtml = true;
-		this.sayUhtml(this.getSignupsHtml(), "signups");
+		if (!this.isMiniGame) {
+			this.showSignupsHtml = true;
+			this.sayUhtml(this.getSignupsHtml(), "signups");
+		}
 		this.signupsTime = Date.now();
 		if (!this.userHosted && this.shinyMascot) this.say(this.mascot!.name + " is shiny so bits will be doubled!");
 		if (this.onSignups) this.onSignups();
@@ -191,9 +198,16 @@ export class Game extends Activity {
 	}
 
 	addPlayer(user: User | string): Player | void {
+		if (this.options.freejoin || this.isMiniGame) {
+			if (typeof user !== 'string') user.say("This game doesn't require you to join.");
+			return;
+		}
 		const player = this.createPlayer(user);
 		if (!player) return;
-		if (this.onAddPlayer && !this.onAddPlayer(player)) return;
+		if (this.onAddPlayer && !this.onAddPlayer(player)) {
+			this.removePlayer(user);
+			return;
+		}
 		const bits = this.addBits(player, 10, true);
 		player.say("Thanks for joining the " + this.name + " " + this.activityType + "!" + (bits ? " Have some free bits!" : ""));
 		if (this.getSignupsHtml && this.showSignupsHtml && !this.started && !this.signupsHtmlTimeout) {
@@ -206,6 +220,7 @@ export class Game extends Activity {
 	}
 
 	removePlayer(user: User | string) {
+		if (this.options.freejoin || this.isMiniGame) return;
 		const player = this.destroyPlayer(user);
 		if (!player) return;
 		if (this.onRemovePlayer) this.onRemovePlayer(player);
@@ -256,7 +271,7 @@ export class Game extends Activity {
 	}
 
 	addBits(user: User | Player, bits: number, noPm?: boolean): boolean {
-		if (this.parentGame && !this.parentGame.allowChildGameBits) return false;
+		if (this.isPm(this.room) || (this.parentGame && !this.parentGame.allowChildGameBits)) return false;
 		if (this.shinyMascot) bits *= 2;
 		Storage.addPoints(this.room, user.name, bits, this.format.id);
 		if (!noPm) user.say("You were awarded " + bits + " bits! To see your total amount, use the command ``" + Config.commandCharacter + "bits " + this.room.id + "``.");
@@ -264,7 +279,7 @@ export class Game extends Activity {
 	}
 
 	removeBits(user: User | Player, bits: number, noPm?: boolean): boolean {
-		if (this.parentGame && !this.parentGame.allowChildGameBits) return false;
+		if (this.isPm(this.room) || (this.parentGame && !this.parentGame.allowChildGameBits)) return false;
 		if (this.shinyMascot) bits *= 2;
 		Storage.removePoints(this.room, user.name, bits, this.format.id);
 		if (!noPm) user.say("You lost " + bits + " bits! To see your remaining amount, use the command ``" + Config.commandCharacter + "bits " + this.room.id + "``.");
@@ -304,7 +319,7 @@ export class Game extends Activity {
 	}
 
 	getPlayerSummary?(player: Player): void;
-	/** Return `false` to prevent a user from being added (must destroy player) */
+	/** Return `false` to prevent a user from being added to the game */
 	onAddPlayer?(player: Player): boolean;
 	onChildEnd?(winners: Map<Player, number>): void;
 	onDeallocate?(): void;

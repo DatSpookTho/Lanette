@@ -1,10 +1,10 @@
 import fs = require('fs');
 import path = require('path');
-import { IAbility, IAbilityComputed, IAbilityCopy, IDataTable, IFormat, IFormatComputed, IFormatData, IItem, IItemComputed, IItemCopy, IMove, IMoveComputed, IMoveCopy, INature, IPokemon, IPokemonComputed, IPokemonCopy } from './types/in-game-data-types';
+import { IAbility, IAbilityComputed, IAbilityCopy, IDataTable, IFormat, IFormatComputed, IFormatData, IFormatLinks, IItem, IItemComputed, IItemCopy, IMove, IMoveComputed, IMoveCopy, INature, IPokemon, IPokemonComputed, IPokemonCopy, ISeparatedCustomRules } from './types/in-game-data-types';
 
 const PokemonShowdown = path.resolve(__dirname, '.', '..', 'Pokemon-Showdown');
 const dataDir = path.join(PokemonShowdown, 'data');
-const modsDir = path.join(PokemonShowdown, 'mods');
+const modsDir = path.join(dataDir, 'mods');
 const lanetteDataDir = path.resolve(__dirname, '.', '..', 'data');
 const currentGen = 'gen7';
 
@@ -61,6 +61,26 @@ const natures: Dict<INature> = {
 	sassy: {name: "Sassy", plus: 'spd', minus: 'spe'},
 	serious: {name: "Serious"},
 	timid: {name: "Timid", plus: 'spe', minus: 'atk'},
+};
+
+const tagNames: Dict<string> = {
+	'mega': 'Mega',
+	'uber': 'Uber',
+	'ou': 'OU',
+	'uubl': 'UUBL',
+	'uu': 'UU',
+	'rubl': 'RUBL',
+	'ru': 'RU',
+	'nubl': 'NUBL',
+	'nu': 'NU',
+	'publ': 'PUBL',
+	'pu': 'PU',
+	'nfe': 'NFE',
+	'lcuber': 'LC Uber',
+	'lc': 'LC',
+	'cap': 'Cap',
+	'caplc': 'Cap LC',
+	'capnfe': 'Cap NFE',
 };
 
 const dexes: Dict<Dex> = {};
@@ -227,7 +247,7 @@ export class Dex {
 			if (format.mod === undefined) format.mod = currentGen;
 		}
 
-		let formats: Dict<IFormat> = {};
+		let formats: Dict<IFormatData & IFormatLinks> = {};
 		try {
 			const dataObject = require(path.join(lanetteDataDir, 'format-links.js'));
 			formats = dataObject.BattleFormatLinks;
@@ -241,20 +261,6 @@ export class Dex {
 			const formatData = formatsList[i];
 			const id = Tools.toId(formatData.name);
 			if (!id) continue;
-			const maxLevel = formatData.maxLevel || 100;
-			if (!formatData.defaultLevel) formatData.defaultLevel = formatData.maxLevel;
-			const formatComputed: IFormatComputed = {
-				banlist: formatData.banlist || [],
-				customRules: null,
-				defaultLevel: formatData.defaultLevel || maxLevel,
-				effectType: formatData.effectType || "Format",
-				id,
-				maxLevel,
-				ruleset: formatData.ruleset || [],
-				ruleTable: null,
-				tournamentPlayable: !!(formatData.searchShow || formatData.challengeShow || formatData.tournamentShow),
-				unbanlist: formatData.unbanlist || [],
-			};
 			let viability = '';
 			let info = '';
 			let np = '';
@@ -285,15 +291,17 @@ export class Dex {
 				}
 			}
 			if (id in formats) {
-				if (viability) formatComputed['viability-official'] = viability;
-				if (info) formatComputed['info-official'] = info;
-				if (np) formatComputed['np-official'] = np;
-				Object.assign(formats[id], formatData, formatComputed);
+				Object.assign(formats[id], formatData, {
+					'info-official': info,
+					'np-official': np,
+					'viability-official': viability,
+				});
 			} else {
-				if (viability) formatComputed.viability = viability;
-				if (info) formatComputed.info = info;
-				if (np) formatComputed.np = np;
-				formats[id] = Object.assign(formatData, formatComputed);
+				formats[id] = Object.assign(formatData, {
+					info,
+					np,
+					viability,
+				});
 			}
 		}
 
@@ -483,6 +491,20 @@ export class Dex {
 		return Tools.deepClone(ability);
 	}
 
+	/** Returns a list of standard abilities
+	 *
+	 * filterAbility: Return `true` to filter `ability` out of the list
+	 */
+	getAbilitiesList(filterAbility?: (ability: IAbility) => boolean): IAbility[] {
+		const abilities: IAbility[] = [];
+		for (const i in this.data.abilities) {
+			const ability = this.getExistingAbility(i);
+			if (ability.isNonstandard || (filterAbility && filterAbility(ability))) continue;
+			abilities.push(ability);
+		}
+		return abilities;
+	}
+
 	getItem(name: string): IItem | null {
 		let id = Tools.toId(name);
 		if (!id) return null;
@@ -538,6 +560,20 @@ export class Dex {
 		return Tools.deepClone(item);
 	}
 
+	/** Returns a list of standard items
+	 *
+	 * filterItem: Return `true` to filter `item` out of the list
+	 */
+	getItemsList(filterItem?: (item: IItem) => boolean): IItem[] {
+		const items: IItem[] = [];
+		for (const i in this.data.items) {
+			const item = this.getExistingItem(i);
+			if (item.isNonstandard || (filterItem && filterItem(item))) continue;
+			items.push(item);
+		}
+		return items;
+	}
+
 	getMove(name: string): IMove | null {
 		let id = Tools.toId(name);
 		if (!id) return null;
@@ -589,6 +625,20 @@ export class Dex {
 	getMoveCopy(name: string): IMoveCopy {
 		const move = this.getExistingMove(name);
 		return Tools.deepClone(move);
+	}
+
+	/** Returns a list of standard moves
+	 *
+	 * filterMove: Return `true` to filter `move` out of the list
+	 */
+	getMovesList(filterMove?: (move: IMove) => boolean): IMove[] {
+		const moves: IMove[] = [];
+		for (const i in this.data.moves) {
+			const move = this.getExistingMove(i);
+			if (move.isNonstandard || (filterMove && filterMove(move))) continue;
+			moves.push(move);
+		}
+		return moves;
 	}
 
 	getPokemon(name: string): IPokemon | null {
@@ -677,19 +727,92 @@ export class Dex {
 		return Tools.deepClone(pokemon);
 	}
 
-	getFormat(name: string): IFormat | null {
-		let id = Tools.toId(name);
-		if (!id) return null;
-		if (this.data.aliases.hasOwnProperty(id)) id = Tools.toId(this.data.aliases[id]);
-		if (!this.data.formats.hasOwnProperty(id)) return null;
-		// data computed in includeFormats();
-		return Object.assign({}, this.data.formats[id]);
+	/** Returns a list of standard Pokemon
+	 *
+	 * filterPokemon: Return `true` to filter `pokemon` out of the list
+	 */
+	getPokemonList(filterPokemon?: (pokemon: IPokemon) => boolean): IPokemon[] {
+		const pokedex: IPokemon[] = [];
+		for (const i in this.data.pokedex) {
+			const pokemon = this.getExistingPokemon(i);
+			if (pokemon.isNonstandard || (filterPokemon && filterPokemon(pokemon))) continue;
+			pokedex.push(pokemon);
+		}
+		return pokedex;
 	}
 
-	getExistingFormat(name: string): IFormat {
-		const format = this.getFormat(name);
+	getFormat(name: string, isTrusted?: boolean): IFormat | null {
+		let id = Tools.toId(name);
+		if (!id) return null;
+
+		let supplementaryAttributes: {customRules?: string[], searchShow?: boolean} = {};
+		if (name.includes('@@@')) {
+			if (!isTrusted) {
+				try {
+					name = this.validateFormat(name);
+					isTrusted = true;
+				// tslint:disable-next-line
+				} catch (e) {}
+			}
+			const [newName, customRulesString] = name.split('@@@', 2);
+			name = newName;
+			id = Tools.toId(name);
+			if (isTrusted && customRulesString) {
+				supplementaryAttributes = {
+					customRules: customRulesString.split(','),
+					searchShow: false,
+				};
+			}
+		}
+
+		if (this.data.aliases.hasOwnProperty(id)) id = Tools.toId(this.data.aliases[id]);
+		if (!this.data.formats.hasOwnProperty(id)) return null;
+
+		const formatData = this.data.formats[id]!;
+		const maxLevel = formatData.maxLevel || 100;
+		const formatComputed: IFormatComputed = {
+			customRules: null,
+			banlist: formatData.banlist || [],
+			defaultLevel: formatData.defaultLevel || maxLevel,
+			effectType: formatData.effectType || "Format",
+			id,
+			maxLevel,
+			ruleset: formatData.ruleset || [],
+			ruleTable: null,
+			tournamentPlayable: !!(formatData.searchShow || formatData.challengeShow || formatData.tournamentShow),
+			separatedCustomRules: null,
+			unbanlist: formatData.unbanlist || [],
+			unranked: formatData.rated === false || id.includes('challengecup') || id.includes('hackmonscup') || (formatData.team && (id.includes('1v1') || id.includes('monotype'))) ||
+				formatData.mod === 'seasonal' || formatData.mod === 'ssb',
+		};
+		return Object.assign({}, formatData, formatComputed, supplementaryAttributes);
+	}
+
+	getExistingFormat(name: string, isTrusted?: boolean): IFormat {
+		const format = this.getFormat(name, isTrusted);
 		if (!format) throw new Error("No format returned for '" + name + "'");
 		return format;
+	}
+
+	/**
+	 * Returns a sanitized format ID if valid, or throws if invalid
+	 */
+	validateFormat(name: string) {
+		const [formatName, customRulesString] = name.split('@@@', 2);
+		const format = this.getFormat(formatName);
+		if (!format) throw new Error(`Unrecognized format "${formatName}"`);
+		if (!customRulesString) return format.id;
+		const ruleTable = this.getRuleTable(format);
+		const customRules = customRulesString.split(',').map(rule => {
+			const ruleSpec = this.validateRule(rule);
+			if (typeof ruleSpec === 'string' && ruleTable.has(ruleSpec)) return null;
+			return rule.replace(/[\r\n|]*/g, '').trim();
+		}).filter(rule => rule);
+		if (!customRules.length) throw new Error(`The format already has your custom rules`);
+		const validatedFormatid = format.id + '@@@' + customRules.join(',');
+		const moddedFormat = this.getFormat(validatedFormatid, true)!;
+		this.getRuleTable(moddedFormat);
+		return validatedFormatid;
 	}
 
 	getRuleTable(format: IFormat, depth = 0): RuleTable {
@@ -865,6 +988,67 @@ export class Dex {
 			throw new Error(`Nothing matches "${rule}"`);
 		}
 		return matches[0];
+	}
+
+	getValidatedRuleName(rule: string): string {
+		if (rule === 'unreleased') return 'Unreleased';
+		if (rule === 'illegal') return 'Illegal';
+		const type = rule.charAt(0);
+		let ruleName: string;
+		if (type === '+' || type === '-' || type === '!') {
+			ruleName = rule.substr(1);
+		} else {
+			ruleName = rule;
+		}
+		const index = ruleName.indexOf(':');
+		const tag = ruleName.substr(0, index);
+		ruleName = ruleName.substr(index + 1);
+		if (tag === 'ability') {
+			ruleName = this.getExistingAbility(ruleName).name;
+		} else if (tag === 'item') {
+			ruleName = this.getExistingItem(ruleName).name;
+		} else if (tag === 'move') {
+			ruleName = this.getExistingMove(ruleName).name;
+		} else if (tag === 'pokemon' || tag === 'basepokemon') {
+			ruleName = this.getExistingPokemon(ruleName).species;
+		} else if (tag === 'pokemontag') {
+			ruleName = tagNames[ruleName];
+		}
+
+		return ruleName;
+	}
+
+	separateCustomRules(customRules: string[]): ISeparatedCustomRules {
+		const bans: string[] = [];
+		const unbans: string[] = [];
+		const addedrules: string[] = [];
+		const removedrules: string[] = [];
+		for (let i = 0; i < customRules.length; i++) {
+			const rule = this.validateRule(customRules[i]);
+			if (typeof rule === 'string') {
+				const type = rule.charAt(0);
+				const ruleName = this.getValidatedRuleName(rule);
+
+				if (type === '+') {
+					unbans.push(ruleName);
+				} else if (type === '-') {
+					bans.push(ruleName);
+				} else if (type === '!') {
+					removedrules.push(ruleName);
+				} else {
+					addedrules.push(ruleName);
+				}
+			} else {
+				const complexBans = (rule[3] as string[]).map(x => this.getValidatedRuleName(x));
+				if (rule[0] === 'complexTeamBan') {
+					bans.push(complexBans.join(' ++ '));
+				} else {
+					bans.push(complexBans.join(' + '));
+				}
+			}
+		}
+
+		return {bans, unbans, addedrules, removedrules};
 	}
 
 	getPokemonGif(species: IPokemon | string, direction?: 'front' | 'back', width?: number, height?: number): string {

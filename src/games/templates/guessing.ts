@@ -74,8 +74,8 @@ export const commands: Dict<ICommandDefinition<Guessing>> = {
 			let points = this.points.get(player) || 0;
 			points += awardedPoints;
 			this.points.set(player, points);
-			if (this.options.points === 1) {
-				this.say("**" + user.name + "** guessed " + (this.answers.length > 1 ? 'an' : 'the') + " answer __(" + this.answers.join(", ") + ")__!");
+			if (this.isMiniGame) {
+				this.say((this.pm ? "You" : "**" + user.name + "**") + " guessed " + (this.answers.length > 1 ? 'an' : 'the') + " answer __(" + this.answers.join(", ") + ")__!");
 				this.end();
 				return;
 			} else {

@@ -215,6 +215,15 @@ export class Client {
 					const messageArguments: ITournamentMessageTypes['create'] = {format: Dex.getExistingFormat(messageParts[0]), generator: messageParts[1], playerCap: parseInt(messageParts[2])};
 					if (Tournaments.tournamentTimers[room.id]) clearTimeout(Tournaments.tournamentTimers[room.id]);
 					room.tournament = Tournaments.createTournament(room, messageArguments.format, messageArguments.generator, messageArguments.playerCap);
+					if (room.id in Tournaments.createListeners && messageArguments.format.id === Tournaments.createListeners[room.id].format.id) {
+						if (Tournaments.createListeners[room.id].scheduled) {
+							room.tournament.scheduled = true;
+							Tournaments.setScheduledTournament(room);
+						}
+						room.tournament.format = Tournaments.createListeners[room.id].format;
+						if (room.tournament.format.customRules) room.sayCommand("/tour rules " + room.tournament.format.customRules.join(","));
+						delete Tournaments.createListeners[room.id];
+					}
 					break;
 				}
 
@@ -300,6 +309,9 @@ export class Client {
 
 		case 'init': {
 			console.log("Joined room: " + room.id);
+			if (room.id in Tournaments.schedules) {
+				Tournaments.setScheduledTournament(room);
+			}
 			break;
 		}
 
@@ -330,6 +342,9 @@ export class Client {
 			const user = Users.add(messageArguments.username);
 			room.users.add(user);
 			user.rooms.set(room, messageArguments.rank);
+			if (room.logChatMessages) {
+				Storage.logChatMessage(room, Date.now(), 'J', messageArguments.rank + user.name);
+			}
 			break;
 		}
 
@@ -341,6 +356,9 @@ export class Client {
 			room.users.delete(user);
 			user.rooms.delete(room);
 			if (!user.rooms.size) Users.remove(user);
+			if (room.logChatMessages) {
+				Storage.logChatMessage(room, Date.now(), 'L', messageArguments.rank + user.name);
+			}
 			break;
 		}
 
@@ -373,6 +391,9 @@ export class Client {
 			} else {
 				CommandParser.parse(room, user, messageArguments.message);
 			}
+			if (room.logChatMessages) {
+				Storage.logChatMessage(room, messageArguments.timestamp, 'c', messageArguments.rank + user.name + '|' + messageArguments.message);
+			}
 			break;
 		}
 
@@ -383,9 +404,18 @@ export class Client {
 		}
 
 		case 'pm': {
-			const messageArguments: IClientMessageTypes['pm'] = {rank: messageParts[0].charAt(0), username: messageParts[0].substr(1), message: messageParts.slice(2).join("|")};
+			const messageArguments: IClientMessageTypes['pm'] = {rank: messageParts[0].charAt(0), username: messageParts[0].substr(1), recipient: messageParts[1].substr(1), message: messageParts.slice(2).join("|")};
 			const user = Users.add(messageArguments.username);
-			if (user !== Users.self) {
+			if (user === Users.self) {
+				const recipient = Users.add(messageArguments.recipient);
+				if (recipient.messageListeners) {
+					const id = Tools.toId(messageArguments.message);
+					if (id in recipient.messageListeners) {
+						recipient.messageListeners[id]();
+						delete recipient.messageListeners[id];
+					}
+				}
+			} else {
 				CommandParser.parse(user, user, messageArguments.message);
 			}
 		}

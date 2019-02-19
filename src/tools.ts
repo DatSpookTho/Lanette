@@ -76,9 +76,63 @@ export class Tools {
 		return input.replace(ALPHA_NUMERIC_REGEX, '').trim();
 	}
 
+	toString(input: string | number | undefined | null | {activityType?: string, effectType?: string, name?: string, toString?(): string}): string {
+		if (input === undefined) return 'undefined';
+		if (input === null) return 'null';
+		if (typeof input === 'number') return '' + input;
+		if (typeof input === 'string') return input;
+		for (const i in global) {
+			// @ts-ignore
+			if (input === global[i]) return '[global ' + i + ']';
+		}
+		if (input.effectType && typeof input.effectType === 'string') {
+			return '[' + input.effectType.toLowerCase() + ' ' + input.name + ']';
+		} else if (input.activityType && typeof input.activityType === 'string') {
+			return '[' + input.activityType + ' ' + input.name + ']';
+		} else {
+			if (input.toString) {
+				return input.toString();
+			} else {
+				return '[object UnknownType]';
+			}
+		}
+	}
+
+	joinList(list: string[], preFormatting?: string, postFormatting?: string): string {
+		let len = list.length;
+		if (!len) return '';
+		if (!preFormatting) preFormatting = '';
+		if (!postFormatting) postFormatting = preFormatting;
+		if (len === 1) {
+			return preFormatting + list[0] + postFormatting;
+		} else if (len === 2) {
+			return preFormatting + list[0] + postFormatting + " and " + preFormatting + list[1] + postFormatting;
+		} else {
+			len--;
+			return preFormatting + list.slice(0, len).join(postFormatting + ", " + preFormatting) + postFormatting + ", and " + preFormatting + list[len] + postFormatting;
+		}
+	}
+
 	prepareMessage(message: string): string {
+		message = this.toString(message);
 		if (message.length > MAX_MESSAGE_LENGTH) message = message.substr(0, MAX_MESSAGE_LENGTH - 3) + "...";
 		return message;
+	}
+
+	/**
+	 * Returns a timestamp in the form {yyyy}-{MM}-{dd} {hh}:{mm}:{ss}.
+	 *
+	 * options.human = true will reports hours human-readable
+	 */
+	toTimestampString(date: Date, options?: Dict<any>): string {
+		const human = options && options.human;
+		let parts: any[] = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes(), date.getSeconds()];
+		if (human) {
+			parts.push(parts[3] >= 12 ? 'pm' : 'am');
+			parts[3] = parts[3] % 12 || 12;
+		}
+		parts = parts.map(val => val < 10 ? '0' + val : '' + val);
+		return parts.slice(0, 3).join("-") + " " + parts.slice(3, human ? 5 : 6).join(":") + (human ? "" + parts[6] : "");
 	}
 
 	toDurationString(input: number, options?: {precision?: number, hhmmss?: boolean}): string {

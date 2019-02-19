@@ -12,16 +12,22 @@ export class Room {
 	users = new Set<User>();
 
 	id: string;
+	logChatMessages: boolean;
 	sendId: string;
 
 	constructor(id: string) {
 		this.id = id;
+		this.logChatMessages = !id.startsWith('battle-') && !id.startsWith('groupchat-') && !Config.disallowChatLogging.includes(id);
 		this.sendId = id === 'lobby' ? '' : id;
 	}
 
 	say(message: string, dontPrepare?: boolean) {
 		if (!dontPrepare) message = Tools.prepareMessage(message);
 		Client.send(this.sendId + "|" + message);
+	}
+
+	sayCommand(command: string) {
+		this.say(command, true);
 	}
 
 	sayHtml(html: string) {

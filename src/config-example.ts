@@ -46,3 +46,28 @@ export let developers: string[] = [];
  * A list of rooms (roomids) where scripted games are allowed to be played
  */
 export let allowScriptedGames: string[] = [];
+
+/**
+ * A list of rooms (roomids) where tournament features are allowed to be used
+ */
+export let allowTournaments: string[] = [];
+
+/**
+ * A list of rooms (roomids) where regular tournaments will award leaderboard points
+ */
+export let rankedTournaments: string[] = [];
+
+/**
+ * A list of rooms (roomids) where custom rule tournaments will award leaderboard points
+ */
+export let rankedCustomTournaments: string[] = [];
+
+/**
+ * A list of rooms (roomids) where tournaments in default 'uncompetitive' formats will still award leaderboard points
+ */
+export let ignoreDefaultUnrankedTournaments: string[] = [];
+
+/**
+ * A list of rooms (roomids) where messages will not be logged
+ */
+export let disallowChatLogging: string[] = [];
