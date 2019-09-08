@@ -4,55 +4,116 @@ const path = require('path');
 const util = require('util');
 
 const builtFolder = path.join(__dirname, "built");
+const srcFolder = path.join(__dirname, "src");
+const exec = util.promisify(child_process.exec);
 
-module.exports = async (resolve, reject) => {
-	// Modified from https://stackoverflow.com/a/32197381
-	function deleteFolderRecursive(folder) {
-		folder = folder.trim();
-		if (!folder || folder === '/' || folder === '.') return;
-		let exists = false;
-		try {
-			fs.accessSync(folder);
-			exists = true;
-		} catch (e) {}
-		if (exists) {
-			let contents = fs.readdirSync(folder);
-			for (let i = 0; i < contents.length; i++) {
-				let curPath = path.join(folder, contents[i]);
-				if (fs.lstatSync(curPath).isDirectory()) {
-					deleteFolderRecursive(curPath);
-				} else {
-					fs.unlinkSync(curPath);
+let firstBuild = true;
+
+// Modified from https://stackoverflow.com/a/32197381
+function deleteFolderRecursive(folder) {
+	folder = folder.trim();
+	if (!folder || folder === '/' || folder === '.') return;
+	let exists = false;
+	try {
+		fs.accessSync(folder);
+		exists = true;
+	} catch (e) {}
+	if (exists) {
+		const contents = fs.readdirSync(folder);
+		for (let i = 0; i < contents.length; i++) {
+			const curPath = path.join(folder, contents[i]);
+			if (fs.lstatSync(curPath).isDirectory()) {
+				deleteFolderRecursive(curPath);
+			} else {
+				fs.unlinkSync(curPath);
+			}
+		}
+
+		if (folder !== builtFolder) fs.rmdirSync(folder);
+	}
+}
+
+function listFilesRecursive(folder) {
+	folder = folder.trim();
+	if (!folder || folder === '/' || folder === '.') return [];
+	let fileList = [];
+	let exists = false;
+	try {
+		fs.accessSync(folder);
+		exists = true;
+	} catch (e) {}
+	if (exists) {
+		const contents = fs.readdirSync(folder);
+		for (let i = 0; i < contents.length; i++) {
+			const curPath = path.join(folder, contents[i]);
+			if (fs.lstatSync(curPath).isDirectory()) {
+				fileList = fileList.concat(listFilesRecursive(curPath));
+			}
+			fileList.push(curPath);
+		}
+	}
+	return fileList;
+}
+
+function pruneBuiltFiles() {
+	const builtFiles = listFilesRecursive(builtFolder);
+	const srcFiles = listFilesRecursive(srcFolder);
+	for (let i = 0; i < builtFiles.length; i++) {
+		if (!builtFiles[i].endsWith('.js')) {
+			if (fs.lstatSync(builtFiles[i]).isDirectory()) {
+				if (!srcFiles.includes(path.join(srcFolder, builtFiles[i].substr(builtFolder.length + 1)))) {
+					fs.rmdirSync(builtFiles[i]);
 				}
 			}
-
-			if (folder !== builtFolder) fs.rmdirSync(folder);
+			continue;
 		}
-	};
+		const file = builtFiles[i].substr(builtFolder.length + 1);
+		if (!srcFiles.includes(path.join(srcFolder, file.substr(0, file.length - 3) + '.ts'))) {
+			fs.unlinkSync(builtFiles[i]);
+		}
+	}
+}
 
-	deleteFolderRecursive(builtFolder);
+module.exports = async (resolve, reject) => {
+	if (firstBuild) {
+		firstBuild = false;
+		console.log("Deleting built folder...");
+		deleteFolderRecursive(builtFolder);
 
-	(async () => {
 		const PokemonShowdown = path.join(__dirname, 'Pokemon-Showdown');
 		if (!fs.existsSync(PokemonShowdown)) {
 			console.log("Setting up Pokemon-Showdown folder...");
-			child_process.execSync('git clone https://github.com/Zarel/Pokemon-Showdown.git');
-		} else {
-			console.log("Updating Pokemon-Showdown files...");
-			process.chdir(PokemonShowdown);
-			child_process.execSync('git pull');
-			process.chdir(__dirname);
+			await exec('git clone https://github.com/Zarel/Pokemon-Showdown.git');
+		}
+		process.chdir(PokemonShowdown);
+		const revParse = await exec('git rev-parse master').catch(e => console.log(e));
+		if (revParse && !revParse.Error) {
+			const sha = revParse.stdout.replace("\n", "");
+			const PokemonShowdownLKG = path.join(__dirname, "pokemon-showdown-lkg.txt");
+			if (!fs.existsSync(PokemonShowdownLKG)) {
+				console.log("Copying pokemon-showdown-lkg...");
+				fs.writeFileSync(PokemonShowdownLKG, fs.readFileSync(path.join(__dirname, "pokemon-showdown-lkg-base.txt")));
+			}
+			const lkg = fs.readFileSync(PokemonShowdownLKG).toString();
+			if (sha !== lkg) {
+				console.log("Setting Pokemon-Showdown to LKG...");
+				await exec('git pull');
+				await exec('git reset --hard ' + lkg);
+			}
 		}
 
-		console.log("Running tsc...");
-		const exec = util.promisify(child_process.exec);
-		const build = await exec('npm run tsc', {stdio: 'inherit'}).catch(e => console.log(e));
-		if (!build || build.Error) {
-			reject();
-			return;
-		}
-	
-		console.log("Successfully built files");
-		resolve();
-	})();
+		process.chdir(__dirname);
+	} else {
+		pruneBuiltFiles();
+	}
+
+	console.log("Running tsc...");
+	const build = await exec('npm run tsc').catch(e => console.log(e));
+	if (!build || build.Error) {
+		reject();
+		return;
+	}
+
+	console.log("Successfully built files");
+	resolve();
 }

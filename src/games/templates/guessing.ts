@@ -2,16 +2,56 @@ import { ICommandDefinition } from '../../command-parser';
 import { Player } from '../../room-activity';
 import { Game } from '../../room-game';
 
-export class Guessing extends Game {
+export abstract class Guessing extends Game {
 	answers: string[] = [];
 	canGuess: boolean = false;
 	hint: string = '';
-	points: Map<Player, number> = new Map();
+	htmlHint: boolean | null = null;
+	readonly points: Map<Player, number> = new Map();
+	roundTime: number = 10 * 1000;
 
 	roundCategory?: string;
-	roundGuesses?: Map<Player, boolean>;
+	readonly roundGuesses?: Map<Player, boolean>;
 
-	checkAnswer(guess: string): string {
+	abstract async setAnswers(): Promise<void>;
+
+	onSignups() {
+		if (this.isMiniGame) {
+			this.nextRound();
+		} else {
+			if (this.options.freejoin) this.timeout = setTimeout(() => this.nextRound(), 5000);
+		}
+	}
+
+	async onNextRound() {
+		this.canGuess = false;
+		await this.setAnswers();
+		const onHint = () => {
+			this.canGuess = true;
+			this.timeout = setTimeout(() => {
+				if (this.answers.length) {
+					this.say("Time's up! " + this.getAnswers(''));
+					this.answers = [];
+					if (this.isMiniGame) {
+						this.end();
+						return;
+					}
+				}
+				this.nextRound();
+			}, this.roundTime);
+		};
+
+		if (this.htmlHint) {
+			const uhtmlName = this.uhtmlBaseName + '-hint';
+			this.onUhtml(uhtmlName, this.hint, onHint);
+			this.sayUhtml(uhtmlName, this.hint);
+		} else {
+			this.on(this.hint, onHint);
+			this.say(this.hint);
+		}
+	}
+
+	async checkAnswer(guess: string): Promise<string> {
 		guess = Tools.toId(guess);
 		let match = '';
 		const guessMega = (guess.substr(0, 4) === 'mega' ? guess.substr(4) + 'mega' : '');
@@ -23,10 +63,10 @@ export class Guessing extends Game {
 				break;
 			}
 		}
-		return match;
+		return Promise.resolve(match);
 	}
 
-	getAnswers(finalAnswer?: boolean): string {
+	getAnswers(givenAnswer: string, finalAnswer?: boolean): string {
 		let len = this.answers.length;
 		let answers = "The" + (finalAnswer ? " final " : "") + " answer" + (len > 1 ? "s were" : " was") + " __";
 		if (len >= 3) {
@@ -46,27 +86,23 @@ export class Guessing extends Game {
 	onGuess?(guess: string, player?: Player): void;
 }
 
-export abstract class GuessingAbstract {
-	abstract setAnswers(): void;
-}
-
 export const commands: Dict<ICommandDefinition<Guessing>> = {
 	guess: {
-		command(target, room, user) {
-			if (!this.started || !this.canGuess || (this.players[user.id] && this.players[user.id].eliminated) ||
+		async command(target, room, user) {
+			if (!this.started || !this.canGuess || !this.answers.length || (this.players[user.id] && this.players[user.id].eliminated) ||
 				(this.parentGame && (!this.players[user.id] || this.players[user.id].eliminated))) return;
 			const player = this.createPlayer(user) || this.players[user.id];
 			if (!player.active) player.active = true;
-			const guess = Tools.toId(target);
-			if (!guess) return;
-			if (this.filterGuess && this.filterGuess(guess)) return;
+			if (!Tools.toId(target)) return;
+			if (this.filterGuess && this.filterGuess(target)) return;
 			if (this.roundGuesses) {
 				if (this.roundGuesses.has(player)) return;
 				this.roundGuesses.set(player, true);
 			}
-			const answer = this.checkAnswer(guess);
+			const answer = await this.checkAnswer(target);
+			if (this.ended || !this.answers.length) return;
 			if (!answer) {
-				if (this.onGuess) this.onGuess(guess);
+				if (this.onGuess) this.onGuess(target);
 				return;
 			}
 			if (this.timeout) clearTimeout(this.timeout);
@@ -75,14 +111,14 @@ export const commands: Dict<ICommandDefinition<Guessing>> = {
 			points += awardedPoints;
 			this.points.set(player, points);
 			if (this.isMiniGame) {
-				this.say((this.pm ? "You" : "**" + user.name + "**") + " guessed " + (this.answers.length > 1 ? 'an' : 'the') + " answer __(" + this.answers.join(", ") + ")__!");
+				this.say((this.pm ? "You are" : "**" + user.name + "** is") + " correct! " + this.getAnswers(answer));
 				this.end();
 				return;
 			} else {
 				// this.markFirstAction(player);
 				// if (this.id === 'zygardesorders' && this.revealedLetters === 1) Games.unlockAchievement(this.room, player, "Tall Order", this);
 				if (points >= this.options.points) {
-					let text = '**' + player.name + '** wins' + (this.parentGame ? '' : ' the game') + '! ' + this.getAnswers(true);
+					let text = '**' + player.name + '** wins' + (this.parentGame ? '' : ' the game') + '! ' + this.getAnswers(answer, true);
 					if (text.length > 300) {
 						text = '**' + player.name + '** wins' + (this.parentGame ? '' : ' the game') + '! A possible answer was __' + answer + '__.';
 					}
@@ -116,7 +152,8 @@ export const commands: Dict<ICommandDefinition<Guessing>> = {
 					this.end();
 					return;
 				} else {
-					let text = '**' + player.name + '** advances to **' + points + '** point' + (points > 1 ? 's' : '') + '! ' + this.getAnswers();
+					if (this.hint) this.off(this.hint);
+					let text = '**' + player.name + '** advances to **' + points + '** point' + (points > 1 ? 's' : '') + '! ' + this.getAnswers(answer);
 					if (text.length > 300) {
 						text = '**' + player.name + '** advances to **' + points + '** point' + (points > 1 ? 's' : '') + '! A possible answer was __' + answer + '__.';
 					}

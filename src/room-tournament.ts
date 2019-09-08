@@ -1,18 +1,25 @@
-import { Activity } from "./room-activity";
+import { Activity, Player } from "./room-activity";
 import { Room } from "./rooms";
 import { IFormat } from "./types/in-game-data-types";
 
 interface IBracketNode {
-	team: string;
-	children: IBracketNode[];
-	state: string;
-	result: string;
+	readonly result: string;
+	readonly state: 'available' | 'challenging' | 'inprogress' | 'finished' | 'unavailable';
+	readonly team: string;
+	readonly children?: IBracketNode[];
 }
 
 interface IBracketData {
-	type: string;
-	rootNode?: IBracketNode;
-	tableHeaders?: {cols: any[], rows: any[]};
+	readonly type: string;
+	readonly rootNode?: IBracketNode;
+	readonly tableHeaders?: {cols: any[], rows: any[]};
+	readonly users?: string[];
+}
+
+interface ICurrentBattle {
+	readonly playerA: Player;
+	readonly playerB: Player;
+	readonly roomid: string;
 }
 
 export interface ITournamentUpdateJSON {
@@ -51,6 +58,11 @@ export interface ITournamentEndJSON {
 	results: string[][];
 }
 
+export interface IBattleData {
+	remainingPokemon: Dict<number>;
+	slots: Map<Player, string>;
+}
+
 const generators: Dict<number> = {
 	"Single": 1,
 	"Double": 2,
@@ -61,10 +73,14 @@ const generators: Dict<number> = {
 };
 
 export class Tournament extends Activity {
-	activityType: string = 'tournament';
-	createTime: number = Date.now();
+	readonly activityType: string = 'tournament';
+	adjustCapTimer: NodeJS.Timer | null = null;
+	readonly battleData: Dict<IBattleData> = {};
+	readonly battleRooms: string[] = [];
+	readonly createTime: number = Date.now();
+	readonly currentBattles: ICurrentBattle[] = [];
 	generator: number = 1;
-	info: ITournamentUpdateJSON & ITournamentEndJSON = {
+	readonly info: ITournamentUpdateJSON & ITournamentEndJSON = {
 		bracketData: {type: ''},
 		challengeBys: [],
 		challenged: '',
@@ -79,22 +95,39 @@ export class Tournament extends Activity {
 		teambuilderFormat: '',
 	};
 	isRoundRobin: boolean = false;
-	maxRounds: number = 6;
+	manuallyNamed: boolean = false;
+	manuallyEnabledPoints: boolean = false;
+	originalFormat: string = '';
 	scheduled: boolean = false;
-	startTime: number = 0;
+	startTimer: NodeJS.Timer | null = null;
 	totalPlayers: number = 0;
 	updates: Partial<ITournamentUpdateJSON> = {};
 
+	readonly joinBattles: boolean;
+
+	// set in initialize()
 	format!: IFormat;
 	playerCap!: number;
-	room!: Room;
+	readonly room!: Room;
 
-	initialize(format: IFormat, generator: string, playerCap: number) {
+	constructor(room: Room, pmRoom?: Room) {
+		super(room, pmRoom);
+
+		this.joinBattles = Config.trackTournamentBattleScores && Config.trackTournamentBattleScores.includes(room.id) ? true : false;
+	}
+
+	initialize(format: IFormat, generator: string, playerCap: number, name?: string) {
 		this.format = format;
 		this.playerCap = playerCap;
-		this.name = format.name;
+		this.name = name || format.name;
+		this.originalFormat = format.name;
 		this.id = format.id;
+		this.uhtmlBaseName = 'tournament-' + this.id;
 
+		this.setGenerator(generator);
+	}
+
+	setGenerator(generator: string) {
 		const generatorName = generator.split(" ")[0];
 		if (generatorName in generators) {
 			this.generator = generators[generatorName];
@@ -105,17 +138,67 @@ export class Tournament extends Activity {
 		this.isRoundRobin = Tools.toId(generator).includes('roundrobin');
 	}
 
+	setCustomFormatName() {
+		const previousName = this.name;
+		const customFormatName = Dex.getCustomFormatName(this.room, this.format);
+		if (this.format.customRules && (customFormatName === this.format.name || customFormatName.length > 100)) {
+			this.name = this.format.name + " (custom rules)";
+		} else {
+			this.name = customFormatName;
+		}
+
+		if (this.name !== previousName) this.sayCommand("/tour name " + this.name);
+	}
+
+	canAwardPoints(): boolean {
+		if (((this.format.customRules && Config.rankedCustomTournaments && Config.rankedCustomTournaments.includes(this.room.id)) ||
+		(!this.format.customRules && Config.rankedTournaments && Config.rankedTournaments.includes(this.room.id))) &&
+		!(this.format.unranked && Config.useDefaultUnrankedTournaments && Config.useDefaultUnrankedTournaments.includes(this.room.id))) return true;
+
+		return false;
+	}
+
+	adjustCap() {
+		if (this.playerCount % 8 === 0) {
+			this.sayCommand("/tour start");
+			return;
+		}
+		let newCap = this.playerCount + 1;
+		while (newCap % 8 !== 0) {
+			newCap += 1;
+		}
+
+		if (this.playerCap && newCap >= this.playerCap) return;
+		CommandParser.parse(this.room, Users.self, Config.commandCharacter + "tournamentcap " + newCap);
+	}
+
+	onStart() {
+		if (this.startTimer) clearTimeout(this.startTimer);
+	}
+
 	deallocate() {
+		if (this.adjustCapTimer) clearTimeout(this.adjustCapTimer);
+		if (this.startTimer) clearTimeout(this.startTimer);
 		this.room.tournament = null;
 	}
 
 	onEnd() {
+		const database = Storage.getDatabase(this.room);
+		if (!database.pastTournaments) database.pastTournaments = [];
+		database.pastTournaments.unshift(this.format.name);
+		while (database.pastTournaments.length > 8) {
+			database.pastTournaments.pop();
+		}
+
+		if (!database.lastTournamentFormatTimes) database.lastTournamentFormatTimes = {};
+		database.lastTournamentFormatTimes[this.format.id] = Date.now();
+
 		let winners: string[] = [];
 		let runnersUp: string[] = [];
 		let semiFinalists: string[] = [];
 		if (this.info.bracketData.type === 'tree') {
-			if (this.info.bracketData.rootNode && this.generator === 1) {
-				const data = this.info.bracketData.rootNode;
+			const data = this.info.bracketData.rootNode;
+			if (data && data.children && this.generator === 1) {
 				const winner = data.team;
 				winners.push(winner);
 				let runnerUp = '';
@@ -126,14 +209,14 @@ export class Tournament extends Activity {
 				}
 				runnersUp.push(runnerUp);
 
-				if (data.children[0].children.length) {
+				if (data.children[0].children && data.children[0].children.length) {
 					if (data.children[0].children[0].team === runnerUp || data.children[0].children[0].team === winner) {
 						semiFinalists.push(data.children[0].children[1].team);
 					} else {
 						semiFinalists.push(data.children[0].children[0].team);
 					}
 				}
-				if (data.children[1].children.length) {
+				if (data.children[1].children && data.children[1].children.length) {
 					if (data.children[1].children[0].team === runnerUp || data.children[1].children[0].team === winner) {
 						semiFinalists.push(data.children[1].children[1].team);
 					} else {
@@ -148,68 +231,72 @@ export class Tournament extends Activity {
 		}
 		const singleElimination = !this.isRoundRobin && this.generator === 1;
 		if (!winners.length || !runnersUp.length || (singleElimination && semiFinalists.length < 2)) return;
-		if (((this.format.customRules && Config.rankedCustomTournaments.includes(this.room.id)) || (!this.format.customRules && Config.rankedTournaments.includes(this.room.id))) &&
-			!(this.format.unranked && !Config.ignoreDefaultUnrankedTournaments.includes(this.room.id))) {
+		if (!this.canAwardPoints() && !this.manuallyEnabledPoints) {
 			const text = ["runner" + (runnersUp.length > 1 ? "s" : "") + "-up " + Tools.joinList(runnersUp, '**'), "winner" + (winners.length > 1 ? "s" : "") + " " + Tools.joinList(winners, '**')];
 			if (semiFinalists.length) text.unshift("semi-finalist" + (semiFinalists.length > 1 ? "s" : "") + " " + Tools.joinList(semiFinalists, '**'));
-			this.room.say('/wall Congratulations to ' + Tools.joinList(text));
-			return true;
-		}
+			this.sayCommand('/wall Congratulations to ' + Tools.joinList(text));
+		} else {
+			let multiplier = 1;
+			if (!this.format.teamLength || !this.format.teamLength.battle || this.format.teamLength.battle > 2) {
+				if (this.totalPlayers >= 32) {
+					multiplier += ((Math.floor(this.totalPlayers / 32)) * 0.5);
+				}
+			}
+			if (this.scheduled) multiplier *= 2.5;
 
-		let multiplier = 1;
-		if (!this.format.teamLength || !this.format.teamLength.battle || this.format.teamLength.battle > 2) {
-			if (this.totalPlayers >= 32) {
-				multiplier += ((Math.floor(this.totalPlayers / 32)) * 0.5);
+			let pointsName = 'points';
+			let semiFinalistPoints: number;
+			let runnerUpPoints: number;
+			let winnerPoints: number;
+			if (Config.allowScriptedGames && Config.allowScriptedGames.includes(this.room.id)) {
+				pointsName = "bits";
+				semiFinalistPoints = Math.round((100 * multiplier));
+				runnerUpPoints = Math.round((200 * multiplier));
+				winnerPoints = Math.round((300 * multiplier));
+			} else {
+				semiFinalistPoints = Math.round((1 * multiplier));
+				runnerUpPoints = Math.round((2 * multiplier));
+				winnerPoints = Math.round((3 * multiplier));
+			}
+
+			const pointsHtml: string[] = [];
+			pointsHtml.push("runner" + (runnersUp.length > 1 ? "s" : "") + "-up " + Tools.joinList(runnersUp, '<b>', '</b>') + " for earning " + runnerUpPoints + " points");
+			pointsHtml.push("winner" + (winners.length > 1 ? "s" : "") + " " + Tools.joinList(winners, '<b>', '</b>') + " for earning " + winnerPoints + " points");
+			if (semiFinalists.length) {
+				pointsHtml.unshift("semi-finalist" + (semiFinalists.length > 1 ? "s" : "") + " " + Tools.joinList(semiFinalists, '<b>', '</b>') + " for earning " + semiFinalistPoints + " point" + (semiFinalistPoints > 1 ? "s" : ""));
+			}
+
+			const playerStatsHtml = '';
+			// if (showPlayerStats) playerStatsHtml = Tournaments.getPlayerStatsHtml(this.room, this.format);
+
+			this.sayHtml("<div class='infobox-limited'>Congratulations to " + Tools.joinList(pointsHtml) + "!" + (playerStatsHtml ? "<br><br>" + playerStatsHtml : "") + "</div>");
+
+			const winnerPm = 'You were awarded **' + winnerPoints + ' ' + pointsName + '** for being ' + (winners.length > 1 ? 'a' : 'the') + ' tournament winner! To see your total amount, use this command: ``.rank ' + this.room.title + '``';
+			for (let i = 0; i < winners.length; i++) {
+				Storage.addPoints(this.room, winners[i], winnerPoints, this.format.id);
+				// Client.outgoingPms[Tools.toId(winners[i])] = winnerPm;
+				const user = Users.get(winners[i]);
+				if (user) user.say(winnerPm);
+			}
+
+			const runnerUpPm = 'You were awarded **' + runnerUpPoints + ' ' + pointsName + '** for being ' + (runnersUp.length > 1 ? 'a' : 'the') + ' runner-up in the tournament! To see your total amount, use this command: ``.rank ' + this.room.title + '``';
+			for (let i = 0; i < runnersUp.length; i++) {
+				Storage.addPoints(this.room, runnersUp[i], runnerUpPoints, this.format.id);
+				// Client.outgoingPms[Tools.toId(runnersUp[i])] = runnerUpPm;
+				const user = Users.get(runnersUp[i]);
+				if (user) user.say(runnerUpPm);
+			}
+
+			const semiFinalistPm = 'You were awarded **' + semiFinalistPoints + ' ' + pointsName + '** for being ' + (semiFinalists.length > 1 ? 'a' : 'the') + ' semi-finalist in the tournament! To see your total amount, use this command: ``.rank ' + this.room.title + '``';
+			for (let i = 0; i < semiFinalists.length; i++) {
+				Storage.addPoints(this.room, semiFinalists[i], semiFinalistPoints, this.format.id);
+				// Client.outgoingPms[Tools.toId(semiFinalists[i])] = semiFinalistPm;
+				const user = Users.get(semiFinalists[i]);
+				if (user) user.say(semiFinalistPm);
 			}
 		}
-		if (this.scheduled) multiplier *= 2.5;
 
-		let pointsName = 'points';
-		let semiFinalistPoints: number;
-		let runnerUpPoints: number;
-		let winnerPoints: number;
-		if (Config.allowScriptedGames.includes(this.room.id)) {
-			pointsName = "bits";
-			semiFinalistPoints = Math.round((100 * multiplier));
-			runnerUpPoints = Math.round((200 * multiplier));
-			winnerPoints = Math.round((300 * multiplier));
-		} else {
-			semiFinalistPoints = Math.round((1 * multiplier));
-			runnerUpPoints = Math.round((2 * multiplier));
-			winnerPoints = Math.round((3 * multiplier));
-		}
-
-		const pointsHtml = ["runner" + (runnersUp.length > 1 ? "s" : "") + "-up " + Tools.joinList(runnersUp, '<b>', '</b>'), "winner" + (winners.length > 1 ? "s" : "") + " " + Tools.joinList(winners, '<b>', '</b>')];
-		if (semiFinalists.length) pointsHtml.unshift("semi-finalist" + (semiFinalists.length > 1 ? "s" : "") + " " + Tools.joinList(semiFinalists, '<b>', '</b>'));
-
-		const playerStatsHtml = '';
-		// if (showPlayerStats) playerStatsHtml = Tournaments.getPlayerStatsHtml(this.room, this.format);
-
-		this.room.sayHtml("<div class='infobox-limited'>Congratulations to " + Tools.joinList(pointsHtml) + (playerStatsHtml ? "<br><br>" + playerStatsHtml : "") + "</div>");
-
-		const winnerPm = 'You were awarded **' + winnerPoints + ' ' + pointsName + '** for being ' + (winners.length > 1 ? 'a' : 'the') + ' tournament winner! To see your total amount, use this command: ``.rank ' + this.room.id + '``';
-		for (let i = 0, len = winners.length; i < len; i++) {
-			Storage.addPoints(this.room, winners[i], winnerPoints, this.format.id);
-			// Client.outgoingPms[Tools.toId(winners[i])] = winnerPm;
-			const user = Users.get(winners[i]);
-			if (user) user.say(winnerPm);
-		}
-
-		const runnerUpPm = 'You were awarded **' + runnerUpPoints + ' ' + pointsName + '** for being a runner-up in the tournament! To see your total amount, use this command: ``.rank ' + this.room.id + '``';
-		for (let i = 0, len = runnersUp.length; i < len; i++) {
-			Storage.addPoints(this.room, runnersUp[i], runnerUpPoints, this.format.id);
-			// Client.outgoingPms[Tools.toId(runnersUp[i])] = runnerUpPm;
-			const user = Users.get(runnersUp[i]);
-			if (user) user.say(runnerUpPm);
-		}
-
-		const semiFinalistPm = 'You were awarded **' + semiFinalistPoints + ' ' + pointsName + '** for being a semi-finalist in the tournament! To see your total amount, use this command: ``.rank ' + this.room.id + '``';
-		for (let i = 0, len = semiFinalists.length; i < len; i++) {
-			Storage.addPoints(this.room, semiFinalists[i], semiFinalistPoints, this.format.id);
-			// Client.outgoingPms[Tools.toId(semiFinalists[i])] = semiFinalistPm;
-			const user = Users.get(semiFinalists[i]);
-			if (user) user.say(semiFinalistPm);
-		}
+		Storage.exportDatabase(this.room.id);
 	}
 
 	forceEnd() {
@@ -217,90 +304,80 @@ export class Tournament extends Activity {
 		this.deallocate();
 	}
 
-	onStart() {
-		this.startTime = Date.now();
-		let maxRounds = 0;
-		let rounds = Math.ceil((Math.log(this.playerCount) / Math.log(2)));
-		let generator = this.generator;
-		while (generator > 0) {
-			maxRounds += rounds;
-			rounds--;
-			generator--;
-		}
-		this.maxRounds = maxRounds;
-		this.totalPlayers = this.playerCount;
+	update(json: Partial<ITournamentUpdateJSON & ITournamentEndJSON>) {
+		Object.assign(this.updates, json);
 	}
 
-	update() {
+	updateEnd() {
 		Object.assign(this.info, this.updates);
-		if (this.updates.bracketData && this.started) this.updateBracket();
+		if (this.updates.generator) this.setGenerator(this.updates.generator);
+		if (this.updates.bracketData) {
+			if (this.info.isStarted) {
+				this.updateBracket();
+			} else {
+				if (this.updates.bracketData.users) {
+					for (let i = 0; i < this.updates.bracketData.users.length; i++) {
+						this.createPlayer(this.updates.bracketData.users[i]);
+					}
+				}
+			}
+		}
 		if (this.updates.format) {
 			const format = Dex.getFormat(this.updates.format);
 			if (format) {
 				this.name = format.name;
+				if (format.name === this.originalFormat) this.manuallyNamed = false;
 			} else {
 				this.name = this.updates.format;
+				this.manuallyNamed = true;
 			}
 		}
+
 		this.updates = {};
 	}
 
 	updateBracket() {
-		const data = this.info.bracketData;
 		const players: Dict<string> = {};
 		const losses: Dict<number> = {};
-		if (data.type === 'tree') {
-			if (data.rootNode) {
-				const queue = [data.rootNode];
-				while (queue.length > 0) {
-					const node = queue.shift();
-					if (!node) break;
+		if (this.info.bracketData.type === 'tree') {
+			if (!this.info.bracketData.rootNode) return;
+			const queue = [this.info.bracketData.rootNode];
+			while (queue.length > 0) {
+				const node = queue[0];
+				queue.shift();
+				if (!node.children) continue;
 
-					if (node.children[0] && node.children[0].team) {
-						const userA = Tools.toId(node.children[0].team);
-						if (!players[userA]) players[userA] = node.children[0].team;
-						if (node.children[1] && node.children[1].team) {
-							const userB = Tools.toId(node.children[1].team);
-							if (!players[userB]) players[userB] = node.children[1].team;
-							if (node.state === 'finished') {
-								if (node.result === 'win') {
-									if (!losses[userB]) losses[userB] = 0;
-									losses[userB]++;
-								} else if (node.result === 'loss') {
-									if (!losses[userA]) losses[userA] = 0;
-									losses[userA]++;
-								}
+				if (node.children[0] && node.children[0].team) {
+					const userA = Tools.toId(node.children[0].team);
+					if (!players[userA]) players[userA] = node.children[0].team;
+					if (node.children[1] && node.children[1].team) {
+						const userB = Tools.toId(node.children[1].team);
+						if (!players[userB]) players[userB] = node.children[1].team;
+						if (node.state === 'finished') {
+							if (node.result === 'win') {
+								if (!losses[userB]) losses[userB] = 0;
+								losses[userB]++;
+							} else if (node.result === 'loss') {
+								if (!losses[userA]) losses[userA] = 0;
+								losses[userA]++;
 							}
 						}
 					}
+				}
 
-					node.children.forEach(child => {
-						queue.push(child);
-					});
-				}
+				node.children.forEach(child => {
+					if (child) queue.push(child);
+				});
 			}
-		} else if (data.type === 'table') {
-			if (data.tableHeaders && data.tableHeaders.cols) {
-				for (let i = 0; i < data.tableHeaders.cols.length; i++) {
-					const player = Tools.toId(data.tableHeaders.cols[i]);
-					if (!players[player]) players[player] = data.tableHeaders.cols[i];
-				}
+		} else if (this.info.bracketData.type === 'table') {
+			if (!this.info.bracketData.tableHeaders || !this.info.bracketData.tableHeaders.cols) return;
+			for (let i = 0; i < this.info.bracketData.tableHeaders.cols.length; i++) {
+				const player = Tools.toId(this.info.bracketData.tableHeaders.cols[i]);
+				if (!players[player]) players[player] = this.info.bracketData.tableHeaders.cols[i];
 			}
 		}
-		if (!this.playerCount) {
-			const len = Object.keys(players).length;
-			let maxRounds = 0;
-			let rounds = Math.ceil((Math.log(len) / Math.log(2)));
-			let generator = this.generator;
-			while (generator > 0) {
-				maxRounds += rounds;
-				rounds--;
-				generator--;
-			}
-			this.maxRounds = maxRounds;
-			this.totalPlayers = len;
-			this.playerCount = len;
-		}
+
+		if (!this.totalPlayers) this.totalPlayers = Object.keys(players).length;
 
 		// clear users who are now guests (currently can't be tracked)
 		for (const i in this.players) {
@@ -308,15 +385,53 @@ export class Tournament extends Activity {
 		}
 
 		for (const i in players) {
-			const player = this.createPlayer(players[i]);
-			if (!player || player.eliminated) continue;
-			if (losses[i] && (!player.losses || player.losses < losses[i])) {
+			const player = this.createPlayer(players[i]) || this.players[i];
+			if (player.eliminated) continue;
+			if (losses[i] && losses[i] !== player.losses) {
 				player.losses = losses[i];
 				if (player.losses >= this.generator) {
 					player.eliminated = true;
-					continue;
 				}
 			}
+		}
+	}
+
+	onBattleStart(usernameA: string, usernameB: string, roomid: string) {
+		const idA = Tools.toId(usernameA);
+		const idB = Tools.toId(usernameB);
+		if (!(idA in this.players) || !(idB in this.players)) throw new Error("Player not found for " + usernameA + " vs. " + usernameB + " in " + roomid);
+		this.currentBattles.push({
+			playerA: this.players[idA],
+			playerB: this.players[idB],
+			roomid,
+		});
+
+		this.battleRooms.push(roomid);
+
+		if (this.generator === 1 && this.getRemainingPlayerCount() === 2) {
+			this.sayCommand("/wall Final battle of the " + this.name + " " + this.activityType + ": <<" + roomid + ">>!");
+		}
+		if (this.joinBattles) {
+			const battleRoom = Rooms.add(roomid);
+			battleRoom.tournament = this;
+			this.sayCommand("/join " + roomid);
+		}
+	}
+
+	onBattleEnd(usernameA: string, usernameB: string, score: [string, string], roomid: string) {
+		const idA = Tools.toId(usernameA);
+		const idB = Tools.toId(usernameB);
+		if (!(idA in this.players) || !(idB in this.players)) throw new Error("Player not found for " + usernameA + " vs. " + usernameB + " in " + roomid);
+		for (let i = 0; i < this.currentBattles.length; i++) {
+			if (this.currentBattles[i].playerA === this.players[idA] && this.currentBattles[i].playerB === this.players[idB] && this.currentBattles[i].roomid === roomid) {
+				this.currentBattles.splice(i, 1);
+				break;
+			}
+		}
+
+		if (this.joinBattles) {
+			const room = Rooms.get(roomid);
+			if (room) room.say("/leave");
 		}
 	}
 }

@@ -3,16 +3,11 @@ global.Tools = new tools.Tools();
 
 // @ts-ignore - generated after first run
 import * as config from './config';
-global.Config = config;
+import * as ConfigLoader from './config-loader';
+global.Config = ConfigLoader.load(config);
 
-Config.rooms = Config.rooms.map(x => Tools.toRoomId(x));
-Config.developers = Config.developers.map(x => Tools.toId(x));
-Config.allowScriptedGames = Config.allowScriptedGames.map(x => Tools.toRoomId(x));
-Config.disallowChatLogging = Config.disallowChatLogging.map(x => Tools.toRoomId(x));
-Config.allowTournaments = Config.allowTournaments.map(x => Tools.toRoomId(x));
-Config.rankedTournaments = Config.rankedTournaments.map(x => Tools.toRoomId(x));
-Config.rankedCustomTournaments = Config.rankedCustomTournaments.map(x => Tools.toRoomId(x));
-Config.ignoreDefaultUnrankedTournaments = Config.ignoreDefaultUnrankedTournaments.map(x => Tools.toRoomId(x));
+import * as dex from './dex';
+global.Dex = new dex.Dex();
 
 import * as client from './client';
 global.Client = new client.Client();
@@ -21,10 +16,7 @@ import * as commandParser from './command-parser';
 global.CommandParser = new commandParser.CommandParser();
 
 import commands = require('./commands');
-global.Commands = Object.assign(Object.create(null), CommandParser.loadCommands(commands));
-
-import * as dex from './dex';
-global.Dex = new dex.Dex('base');
+global.Commands = CommandParser.loadBaseCommands(commands);
 
 import * as games from './games';
 global.Games = new games.Games();
@@ -40,3 +32,6 @@ global.Tournaments = new tournaments.Tournaments();
 
 import * as users from './users';
 global.Users = new users.Users();
+
+Games.loadFormats();
+Storage.importDatabases();

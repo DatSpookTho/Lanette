@@ -1,35 +1,52 @@
 import { Player } from "../../room-activity";
 import { Game } from "../../room-game";
-import { IUserHostedFile } from "../../types/games";
+import { Room } from "../../rooms";
+import { GameDifficulty, IUserHostedFile } from "../../types/games";
 import { User } from "../../users";
 
 const timeLimit = 25 * 60 * 1000;
 
 export class UserHosted extends Game {
 	endTime: number = 0;
+	gameTimer: NodeJS.Timer | null = null;
 	hostId: string = '';
 	hostName: string = '';
 	hostTimeout: NodeJS.Timer | null = null;
-	points = new Map<Player, number>();
+	readonly points = new Map<Player, number>();
+	savedWinners: Player[] | null = null;
 	scoreCap: number = 0;
-	userHosted = true;
+	storedMessage: string | null = null;
+	twist: string | null = null;
+	isUserHosted = true;
+
+	// type hack for onDeallocate
+	room!: Room;
 
 	onInitialize() {
 		this.endTime = Date.now() + timeLimit;
 		this.nameWithOptions = this.hostName + "'s " + this.nameWithOptions;
-		this.uhtmlId = 'userhosted-' + this.id;
+		this.uhtmlBaseName = 'userhosted-' + this.id;
 	}
 
-	setHost(host: User) {
-		this.hostId = host.id;
-		this.hostName = host.name;
+	setHost(host: User | string) {
+		if (typeof host === 'string') {
+			this.hostId = Tools.toId(host);
+			this.hostName = host;
+		} else {
+			this.hostId = host.id;
+			this.hostName = host.name;
+		}
 	}
 
 	onDeallocate() {
+		if (this.gameTimer) clearTimeout(this.gameTimer);
 		if (this.hostTimeout) clearTimeout(this.hostTimeout);
+		this.room.userHostedGame = null;
 	}
 
 	onSignups() {
+		this.notifyRankSignups = true;
+		this.sayCommand("/notifyrank all, " + this.room.title + " user-hosted game," + this.name + "," + this.hostName + " is hosting a hostgame of " + this.name, true);
 		const firstWarning = 5 * 60 * 1000;
 		const secondWarning = 30 * 1000;
 		this.hostTimeout = setTimeout(() => {
@@ -43,11 +60,42 @@ export class UserHosted extends Game {
 			}, firstWarning - secondWarning);
 		}, timeLimit - firstWarning);
 	}
+
+	onEnd() {
+		let hostDifficulty: GameDifficulty;
+		if (Config.userHostedGameHostDifficulties && this.format.id in Config.userHostedGameHostDifficulties) {
+			hostDifficulty = Config.userHostedGameHostDifficulties[this.format.id];
+		} else {
+			hostDifficulty = 'medium';
+		}
+
+		let hostBits: number;
+		if (hostDifficulty === 'easy') {
+			hostBits = 300;
+		} else if (hostDifficulty === 'medium') {
+			hostBits = 400;
+		} else if (hostDifficulty === 'hard') {
+			hostBits = 500;
+		}
+		if (this.shinyMascot) hostBits! *= 2;
+		Storage.addPoints(this.room as Room, this.hostName, hostBits!, 'userhosted');
+		const user = Users.get(this.hostName);
+		if (user) user.say("You were awarded " + hostBits! + " bits! To see your total amount, use this command: ``" + Config.commandCharacter + "bits " + (this.room as Room).title + "``. Thanks for your efforts, we hope you host again soon!");
+		const database = Storage.getDatabase(this.room);
+		if (!(this.room.id in Games.lastUserHostTimes)) Games.lastUserHostTimes[this.room.id] = {};
+		Games.lastUserHostTimes[this.room.id][this.hostId] = Date.now();
+	}
 }
 
 export const game: IUserHostedFile<UserHosted> = {
 	class: UserHosted,
 	formats: [
+		{
+			name: "Floette's Forum Game",
+			mascot: "Floette-eternal",
+			description: "A game from Game Corner's official forum.",
+			aliases: ['ffg'],
+		},
 		{
 			name: "Acrotopia",
 			description: "Each round, players earn points by coming up with creative interpretations of an acronym chosen by the host",
@@ -59,6 +107,12 @@ export const game: IUserHostedFile<UserHosted> = {
 			description: "A tournament style game where each player is given a Pokemon to battle with in [Gen 7] OU. Defeating an opponent allows the player to add the opponent’s Pokemon to his or her team. This continues until there is only one player left standing!",
 		},
 		{
+			name: "Buneary's Bountiful Buffet",
+			mascot: "Buneary",
+			aliases: ['BBB', 'Bunearys'],
+			description: "Players try to choose the meals for maximum points, but meals picked by multiple people are shared!",
+		},
+		{
 			name: "Commonyms",
 			description: "Players must find the word that applies to all of the words in the puzzle Ex: sky, jay, sad | Answer: blue",
 			freejoin: true,
@@ -68,11 +122,32 @@ export const game: IUserHostedFile<UserHosted> = {
 			description: "Players have to do .count in the right order based on the given category (numbers, words or etc.). The first person to mess up the sequence loses a point, so be careful!",
 		},
 		{
+			name: "Delcatty's Hide and Seek",
+			mascot: "Delcatty",
+			aliases: ['DHS', 'Delcattys'],
+			description: "Each round, the host will give a param that determines Pokemon players can hide behind (by PMing the host). One player will be chosen to seek one Pokemon. If anyone hid behind it, they are eliminated. If not, the seeker is eliminated.",
+		},
+		{
+			name: "Diddly Dice",
+			aliases: ['DD', 'DDice'],
+			description: "Players bid numbers from 1-100 and after 30 seconds, the player with highest bid is chosen. Then, a random number from 1-100 is chosen. If the number is greater than or equal to the player's bid, that player wins, but if is lesser, then that player is eliminated.",
+		},
+		{
 			name: "Dugtrio's Dex Entries",
 			mascot: "Dugtrio",
 			aliases: ['DDE'],
 			description: "Each round players create a brand new Pokedex entry for each Pokemon the host presents. Entries are judged by creativity and originality.",
 			freejoin: true,
+		},
+		{
+			name: "Empoleon's Empires",
+			mascot: "Empoleon",
+			aliases: ['Empires', 'Empoleons'],
+			description: "Each player PMs the host an alias that they will use for the game (fake aliases may be added by the host). Each round, a player guesses who owns an alias. If correct, the owner is eliminated. Otherwise, the player who is guessed goes. The last player standing wins!",
+		},
+		{
+			name: "Excluded",
+			description: "Players try to guess pokemon that aren't excluded by the parameter..",
 		},
 		{
 			name: "Gameathlon",
@@ -95,6 +170,19 @@ export const game: IUserHostedFile<UserHosted> = {
 			approvedHostOnly: true,
 		},
 		{
+			name: "Hypno's Hunches",
+			mascot: "Hypno",
+			aliases: ['Hunches', 'Hypnos'],
+			description: "A variation of hangman where the blanks aren't revealed!",
+			freejoin: true,
+		},
+		{
+			name: "Jigglypuff's Dodgeball",
+			mascot: "Jigglypuff",
+			aliases: ['Dodgeball', 'Jigglypuffs'],
+			description: "Players await Jigglypuff's THROW signal to eliminate the opposing team!",
+		},
+		{
 			name: "Jynx's Klutsy Kissing",
 			mascot: "Jynx",
 			aliases: ['JKK'],
@@ -105,6 +193,11 @@ export const game: IUserHostedFile<UserHosted> = {
 			name: "Letter Getter",
 			description: "In this game, players must complete the phrase with the given letters and (optional) numbers. Example: __26 L of the A__ would be __26 Letters of the Alphabet__.",
 			freejoin: true,
+		},
+		{
+			name: "Luig-E's Challenge",
+			aliases: ['Luiges'],
+			description: "Each round the players decide to either attack, counter or rest to take down Luig-E. However, Luig-E picks a move and can attack too, so be careful with your picks!",
 		},
 		{
 			name: "Lyrics",
@@ -148,6 +241,13 @@ export const game: IUserHostedFile<UserHosted> = {
 			mascot: 'Pachirisu',
 			aliases: ['pachirisus'],
 			description: "'A random Pokemon is displayed by the host and the players have to either recommend or not recommend it. Then, the host will display another random Pokemon. If the 1st Pokemon wins type-wise, the players that recommended it win a point and vice-versa!",
+			freejoin: true,
+		},
+		{
+			name: "Piplup's Letter Placements",
+			mascot: "Piplup",
+			aliases: ['PLP', 'Piplups'],
+			description: "A category and 3 letters will be shown each round. Players must find something in that category that contains those letters side by side in the order given.",
 			freejoin: true,
 		},
 		{
@@ -202,6 +302,24 @@ export const game: IUserHostedFile<UserHosted> = {
 			freejoin: true,
 		},
 		{
+			name: "Russian Rowlet",
+			mascot: "Rowlet",
+			aliases: ['RR', 'Rowlets'],
+			description: "Players pick a number between 1-7 and gain points based on what number they pick. First to 15 points wins!",
+		},
+		{
+			name: "Sableye's Trick House",
+			mascot: "Sableye",
+			aliases: ['Trick House', 'TH', 'Sableyes'],
+			description: "Players make their way through various rooms while avoiding the trap doors. Last person standing wins!",
+		},
+		{
+			name: "Scizor's Clock Tower",
+			mascot: "Scizor",
+			aliases: ['Clock Tower', 'Scizors'],
+			description: "Evade the Scizor as it tries to capture the players by selecting their doors and capturing its prey by being faster than them in a series of minigames! More info: https://www.tapatalk.com/groups/ps_game_corner/scizor-39-s-clock-tower-t803.html",
+		},
+		{
 			name: "Scyther's Message Slide",
 			mascot: "Scyther",
 			description: "Players have to PM the host. Depending on the order in which they PMed, they can win or lose points!",
@@ -216,6 +334,13 @@ export const game: IUserHostedFile<UserHosted> = {
 		{
 			name: "Simon Says",
 			description: "Each round, the host will announce an action. If the action is preceded by 'Simon Says', players must do the action using <code>/me [action]</code>. If players do the action when it is not preceded by 'Simon Says', they are eliminated.",
+		},
+		{
+			name: "Smeargle's Move Parameters",
+			mascot: "Smeargle",
+			aliases: ['MoveParameters', 'MoveParams', 'Smeargles'],
+			description: "Players search for possible /movesearch parameters that result in the given move list!",
+			freejoin: true,
 		},
 		{
 			name: "Spot The Reference",
@@ -261,6 +386,27 @@ export const game: IUserHostedFile<UserHosted> = {
 			mascot: "Weavile",
 			description: "Each round, one player PMs the host a move while the other players PM the host a Pokemon. If a player's Pokemon resists the move or is immune to it, they win points. However, the more picked Pokemon the move hits super effectively, the more points the user gets",
 			aliases: ['WWB'],
+		},
+		{
+			name: "Wishiwashi's Stat Fishing",
+			mascot: "Wishiwashi",
+			aliases: ['Stat Fishing', 'Wishiwashis'],
+			description: "Players await the [ ! ] signal to reel in Pokemon and earn points based on their stats!",
+			freejoin: true,
+		},
+		{
+			name: "Wonder Guard Wipeout",
+			mascot: "Ditto",
+			aliases: ['WGW'],
+			description: "Players must use damaging moves that hit through the transforming Ditto's Wonder Guard (no repeats in a round)!",
+			freejoin: true,
+		},
+		{
+			name: "Zygarde's Orders",
+			mascot: "Zygarde",
+			aliases: ['Orders', 'Zygardes'],
+			description: "A variation of hangman in which the host starts with a single letter. Instead of players guessing letters, the host will start to add more letters. Players have to be the first to guess the complete words to gain points.",
+			freejoin: true,
 		},
 		{
 			name: "20 Questions",

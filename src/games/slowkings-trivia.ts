@@ -1,21 +1,27 @@
-import { DefaultGameOptions } from "../room-game";
+import { DefaultGameOption } from "../room-game";
 import { Room } from "../rooms";
 import { IGameFile } from "../types/games";
-import { commandDescriptions, commands as templateCommands, Guessing, GuessingAbstract } from './templates/guessing';
+import { commandDescriptions, commands as templateCommands, Guessing } from './templates/guessing';
 
-const data: Dict<Dict<string[]>> = {
+const name = "Slowking's Trivia";
+const data: {"Pokemon Abilities": Dict<string[]>, "Pokemon Items": Dict<string[]>, "Pokemon Moves": Dict<string[]>} = {
 	"Pokemon Abilities": {},
 	"Pokemon Items": {},
 	"Pokemon Moves": {},
 };
-const categories = Object.keys(data);
-const questions: Dict<string[]> = {};
+type DataKey = keyof typeof data;
+const categories = Object.keys(data) as DataKey[];
+const categoryKeys: KeyedDict<typeof data, string[]> = {
+	"Pokemon Abilities": [],
+	"Pokemon Items": [],
+	"Pokemon Moves": [],
+};
 let loadedData = false;
 
-class SlowkingsTrivia extends Guessing implements GuessingAbstract {
+class SlowkingsTrivia extends Guessing {
 	static loadData(room: Room) {
 		if (loadedData) return;
-		room.say("Loading game-specific data...");
+		room.say("Loading data for " + name + "...");
 
 		const abilities = Dex.getAbilitiesList();
 		for (let i = 0; i < abilities.length; i++) {
@@ -45,62 +51,35 @@ class SlowkingsTrivia extends Guessing implements GuessingAbstract {
 		}
 
 		for (let i = 0; i < categories.length; i++) {
-			questions[categories[i]] = Object.keys(data[categories[i]]);
+			categoryKeys[categories[i]] = Object.keys(data[categories[i]]);
 		}
 
 		loadedData = true;
 	}
 
-	defaultOptions: DefaultGameOptions[] = ['points'];
+	defaultOptions: DefaultGameOption[] = ['points'];
 
-	onSignups() {
-		if (this.isMiniGame) {
-			this.nextRound();
-		} else {
-			if (this.options.freejoin) this.timeout = setTimeout(() => this.nextRound(), 5000);
-		}
-	}
-
-	setAnswers() {
-		const category = this.roundCategory || this.variant || Tools.sampleOne(categories);
-		const question = Tools.sampleOne(questions[category]);
+	async setAnswers() {
+		const category = (this.roundCategory || this.variant || this.sampleOne(categories)) as DataKey;
+		const question = this.sampleOne(categoryKeys[category]);
 		this.answers = data[category][question];
-		this.hint = "**" + category + "**: " + question;
-	}
-
-	onNextRound() {
-		this.canGuess = false;
-		this.setAnswers();
-		this.on(this.hint, () => {
-			this.canGuess = true;
-			this.timeout = setTimeout(() => {
-				if (this.answers.length) {
-					this.say("Time's up! " + this.getAnswers());
-					this.answers = [];
-					if (this.isMiniGame) {
-						this.end();
-						return;
-					}
-				}
-				this.nextRound();
-			}, 10 * 1000);
-		});
-		this.say(this.hint);
+		this.hint = "[**" + category + "**] " + question;
 	}
 }
 
 export const game: IGameFile<SlowkingsTrivia> = {
-	aliases: ['slowkings', 'triv'],
+	aliases: ['slowkings', 'triv', 'st'],
+	battleFrontierCategory: 'Knowledge',
 	class: SlowkingsTrivia,
 	commandDescriptions,
 	commands: Object.assign({}, templateCommands),
 	description: "Players use the given descriptions (Pokemon related) to guess the answers!",
-	freejoin: true,
 	formerNames: ["Trivia"],
-	name: "Slowking's Trivia",
+	freejoin: true,
+	name,
 	mascot: "Slowking",
 	minigameCommand: 'trivium',
-	minigameDescription: "Use ``.g`` to guess an answer based on the description!",
+	minigameDescription: "Use ``" + Config.commandCharacter + "g`` to guess an answer based on the description!",
 	modes: ["survival"],
 	variants: [
 		{

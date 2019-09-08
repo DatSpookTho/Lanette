@@ -13,11 +13,12 @@ declare global {
 	const Client: Client;
 	const CommandParser: CommandParser;
 	const Commands: CommandsDict;
-	const Config: typeof config;
+	const Config: Partial<typeof config>;
 	const Dex: Dex;
 	const Games: Games;
 	const Rooms: Rooms;
 	const Storage: Storage;
+	const tempConfig: boolean;
 	const Tools: Tools;
 	const Tournaments: Tournaments;
 	const Users: Users;

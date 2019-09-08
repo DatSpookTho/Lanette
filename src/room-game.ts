@@ -1,63 +1,49 @@
 import { ICommandDefinition } from "./command-parser";
-import { Activity, Player } from "./room-activity";
+import { PRNG, PRNGSeed } from "./prng";
+import { Activity, Player, PlayerList } from "./room-activity";
 import { Room } from "./rooms";
 import { IGameFormat } from "./types/games";
 import { IPokemonCopy } from "./types/in-game-data-types";
 import { User } from "./users";
 
-export type DefaultGameOptions = 'points' | 'teams' | 'cards' | 'freejoin';
+export type DefaultGameOption = 'points' | 'teams' | 'cards' | 'freejoin';
+export interface IGameOptionValues {
+	min: number;
+	base: number;
+	max: number;
+}
 
 const SIGNUPS_HTML_DELAY = 2 * 1000;
 
 // base of 0 defaults option to 'off'
-const defaultOptionValues: Dict<{min?: number, base?: number, max?: number}> = {
+const defaultOptionValues: Dict<IGameOptionValues> = {
 	points: {min: 3, base: 5, max: 10},
 	teams: {min: 2, base: 2, max: 4},
 	cards: {min: 4, base: 5, max: 6},
 	freejoin: {min: 1, base: 0, max: 1},
 };
 
-const baseCommands: Dict<ICommandDefinition<Game>> = {
-	summary: {
-		command(target, room, user) {
-			if (!(user.id in this.players)) return;
-			const player = this.players[user.id];
-			if (this.getPlayerSummary) {
-				this.getPlayerSummary(this.players[user.id]);
-			} else {
-				let summary = '';
-				if (this.points) summary += "Your points: " + (this.points.get(player) || 0) + "<br />";
-				if (summary) player.sayHtml(summary);
-			}
-		},
-		globalGameCommand: true,
-		pmOnly: true,
-	},
-};
-
-export const commands = CommandParser.loadCommands(baseCommands);
-
-const globalGameCommands: Dict<ICommandDefinition<Game>> = {};
-for (const i in commands) {
-	if (commands[i].globalGameCommand) globalGameCommands[i] = commands[i];
-}
-
 export class Game extends Activity {
-	activityType: string = 'game';
-	commands = Object.assign(Object.create(null), globalGameCommands);
-	customizableOptions: Dict<{min: number, base: number, max: number}> = Object.create(null);
-	loserPointsToBits: number = 10;
-	maxBits: number = 1000;
+	readonly activityType: string = 'game';
+	awardedBits: boolean = false;
+	canLateJoin: boolean = false;
+	readonly commands: Dict<ICommandDefinition<Game>> = Object.assign(Object.create(null), Games.globalGameCommands);
+	readonly customizableOptions: Dict<IGameOptionValues> = Object.create(null);
+	readonly loserPointsToBits: number = 10;
+	readonly maxBits: number = 1000;
 	namePrefixes: string[] = [];
 	nameSuffixes: string[] = [];
 	nameWithOptions: string = '';
-	options: Dict<number> = Object.create(null);
+	readonly options: Dict<number> = Object.create(null);
 	parentGame: Game | null = null;
+	prng: PRNG = new PRNG();
 	round: number = 0;
 	signupsTime: number = 0;
-	userHosted: boolean = false;
-	winnerPointsToBits: number = 50;
-	winners = new Map<Player, number>();
+	readonly isUserHosted: boolean = false;
+	readonly winnerPointsToBits: number = 50;
+	readonly winners = new Map<Player, number>();
+
+	initialSeed: PRNGSeed;
 
 	// set immediately in initialize()
 	description!: string;
@@ -65,15 +51,40 @@ export class Game extends Activity {
 	inputOptions!: Dict<number>;
 
 	allowChildGameBits?: boolean;
-	defaultOptions?: DefaultGameOptions[];
+	commandDescriptions?: string[];
+	readonly defaultOptions?: DefaultGameOption[];
 	isMiniGame?: boolean;
+	readonly lives?: Map<Player, number>;
 	mascot?: IPokemonCopy;
-	points?: Map<Player, number>;
+	maxPlayers?: number;
+	playerCap?: number;
+	readonly points?: Map<Player, number>;
 	shinyMascot?: boolean;
-	variant?: string;
+	startingLives?: number;
+	startingPoints?: number;
+	subGameNumber?: number;
+	readonly variant?: string;
 
-	isUserHosted(room: Room | User): room is Room {
-		return this.userHosted;
+	constructor(room: Room | User, pmRoom?: Room) {
+		super(room, pmRoom);
+
+		this.initialSeed = this.prng.initialSeed.slice() as PRNGSeed;
+	}
+
+	random(m: number): number {
+		return Tools.random(m, this.prng);
+	}
+
+	sampleMany<T>(array: readonly T[], amount: number | string): T[] {
+		return Tools.sampleMany(array, amount, this.prng);
+	}
+
+	sampleOne<T>(array: readonly T[]): T {
+		return Tools.sampleOne(array, this.prng);
+	}
+
+	shuffle<T>(array: readonly T[]): T[] {
+		return Tools.shuffle(array, this.prng);
 	}
 
 	initialize(format: IGameFormat) {
@@ -81,10 +92,12 @@ export class Game extends Activity {
 		this.inputOptions = this.format.inputOptions;
 		this.name = format.name;
 		this.id = format.id;
-		this.uhtmlId = 'scripted-' + format.id;
+		this.uhtmlBaseName = 'scripted-' + format.id;
 		this.description = format.description;
+		if (this.maxPlayers) this.playerCap = this.maxPlayers;
 
 		if (format.commands) Object.assign(this.commands, format.commands);
+		if (format.commandDescriptions) this.commandDescriptions = format.commandDescriptions;
 		if (format.freejoin) {
 			this.customizableOptions.freejoin = {
 				min: 1,
@@ -95,7 +108,7 @@ export class Game extends Activity {
 		if (format.mascot) {
 			this.mascot = Dex.getPokemonCopy(format.mascot);
 		} else if (format.mascots) {
-			this.mascot = Dex.getPokemonCopy(Tools.sampleOne(format.mascots));
+			this.mascot = Dex.getPokemonCopy(this.sampleOne(format.mascots));
 		}
 		if (format.variant) Object.assign(this, format.variant);
 		if (format.mode) format.mode.initialize(this);
@@ -147,15 +160,16 @@ export class Game extends Activity {
 		if (this.inputOptions.teams) this.namePrefixes.unshift('' + this.options.teams);
 		if (this.inputOptions.cards) this.namePrefixes.unshift(this.inputOptions.cards + "-card");
 		if (this.inputOptions.gen) this.namePrefixes.unshift('Gen ' + this.options.gen);
+		if (this.inputOptions.ports) this.namePrefixes.unshift(this.inputOptions.ports + '-port');
+		if (this.inputOptions.params) this.namePrefixes.unshift(this.inputOptions.params + '-param');
 	}
 
 	deallocate() {
+		if (!this.started && this.notifyRankSignups) this.sayCommand("/notifyoffrank all");
+		if (!this.ended) this.ended = true;
+		this.cleanupMessageListeners();
 		if (this.onDeallocate) this.onDeallocate();
-		if (this.isUserHosted(this.room)) {
-			this.room.userHostedGame = null;
-		} else {
-			this.room.game = null;
-		}
+		if (!this.isUserHosted) this.room.game = null;
 
 		if (this.parentGame) {
 			this.room.game = this.parentGame;
@@ -165,8 +179,9 @@ export class Game extends Activity {
 
 	forceEnd(user: User) {
 		if (this.timeout) clearTimeout(this.timeout);
-		this.say((!this.userHosted ? "The " : "") + this.nameWithOptions + " " + this.activityType + " was forcibly ended.");
+		this.say((!this.isUserHosted ? "The " : "") + this.nameWithOptions + " " + this.activityType + " was forcibly ended.");
 		if (this.onForceEnd) this.onForceEnd(user);
+		this.ended = true;
 		this.deallocate();
 	}
 
@@ -174,10 +189,14 @@ export class Game extends Activity {
 		// TODO: check internal/custom signups
 		if (!this.isMiniGame) {
 			this.showSignupsHtml = true;
-			this.sayUhtml(this.getSignupsHtml(), "signups");
+			this.sayUhtml(this.uhtmlBaseName + "-signups", this.getSignupsHtml());
+			if (!this.isUserHosted) {
+				this.notifyRankSignups = true;
+				this.sayCommand("/notifyrank all, " + (this.room as Room).title + " scripted game," + this.name + ",Hosting a scriptedgame of " + this.name, true);
+			}
 		}
 		this.signupsTime = Date.now();
-		if (!this.userHosted && this.shinyMascot) this.say(this.mascot!.name + " is shiny so bits will be doubled!");
+		if (this.shinyMascot) this.say(this.mascot!.name + " is shiny so bits will be doubled!");
 		if (this.onSignups) this.onSignups();
 		if (this.options.freejoin) {
 			this.started = true;
@@ -191,9 +210,56 @@ export class Game extends Activity {
 		if (this.onNextRound) this.onNextRound();
 	}
 
+	getRoundHtml(getAttributes: (players: PlayerList) => string, players?: PlayerList | null, roundText?: string): string {
+		let html = '<div class="infobox">';
+		if (this.mascot) {
+			html += Dex.getPokemonIcon(this.mascot);
+		}
+		html += this.nameWithOptions;
+		if (this.subGameNumber) html += " - Game " + this.subGameNumber;
+		html += " - " + (roundText || "Round " + this.round);
+
+		if (!players) players = this.getRemainingPlayers();
+		const remainingPlayerCount = this.getRemainingPlayerCount(players);
+		if (remainingPlayerCount > 0) html += "<br />" + (!this.options.freejoin ? "Remaining players" : "Players") + " (" + remainingPlayerCount + "): " + getAttributes.call(this, players);
+		html += "</div>";
+
+		return html;
+	}
+
 	end() {
 		if (this.timeout) clearTimeout(this.timeout);
 		if (this.onEnd) this.onEnd();
+
+		let usedDatabase = false;
+		if (!this.isPm(this.room) && !this.isMiniGame && !this.parentGame) {
+			usedDatabase = true;
+			const now = Date.now();
+			const database = Storage.getDatabase(this.room);
+			if (this.isUserHosted) {
+				if (!database.lastUserHostedGameFormatTimes) database.lastUserHostedGameFormatTimes = {};
+				database.lastUserHostedGameFormatTimes[this.format.id] = now;
+				database.lastUserHostedGameTime = now;
+			} else {
+				if (!database.lastGameFormatTimes) database.lastGameFormatTimes = {};
+				database.lastGameFormatTimes[this.format.id] = now;
+				database.lastGameTime = now;
+			}
+
+			Games.lastGames[this.room.id] = now;
+			if (this.isUserHosted) {
+				Games.lastUserHostedGames[this.room.id] = now;
+			} else {
+				Games.lastScriptedGames[this.room.id] = now;
+			}
+
+			if (Config.gameCooldownTimers && this.room.id in Config.gameCooldownTimers) {
+				this.say("Game cooldown of " + Config.gameCooldownTimers[this.room.id] + " minutes has started! Minigames can be played in " + (Config.gameCooldownTimers[this.room.id] / 2) + " minutes.");
+			}
+		}
+
+		if (this.awardedBits || usedDatabase) Storage.exportDatabase(this.room.id);
+
 		this.deallocate();
 	}
 
@@ -204,31 +270,36 @@ export class Game extends Activity {
 		}
 		const player = this.createPlayer(user);
 		if (!player) return;
-		if (this.onAddPlayer && !this.onAddPlayer(player)) {
-			this.removePlayer(user);
+		if ((this.started && (!this.canLateJoin || (this.playerCap && this.playerCount >= this.playerCap))) || (this.onAddPlayer && !this.onAddPlayer(player, this.started))) {
+			this.removePlayer(user, this.started, true);
 			return;
 		}
-		const bits = this.addBits(player, 10, true);
+		const bits = this.isUserHosted ? 0 : this.addBits(player, 10, true);
 		player.say("Thanks for joining the " + this.name + " " + this.activityType + "!" + (bits ? " Have some free bits!" : ""));
-		if (this.getSignupsHtml && this.showSignupsHtml && !this.started && !this.signupsHtmlTimeout) {
-			this.sayUhtmlChange(this.getSignupsHtml(), "signups");
+		if (this.showSignupsHtml && !this.started) {
+			if (this.signupsHtmlTimeout) clearTimeout(this.signupsHtmlTimeout);
 			this.signupsHtmlTimeout = setTimeout(() => {
+				this.sayUhtmlChange(this.uhtmlBaseName + "-signups", this.getSignupsHtml());
 				this.signupsHtmlTimeout = null;
 			}, SIGNUPS_HTML_DELAY);
 		}
+		if (!this.started && this.playerCap && this.playerCount >= this.playerCap) this.start();
 		return player;
 	}
 
-	removePlayer(user: User | string) {
-		if (this.options.freejoin || this.isMiniGame) return;
-		const player = this.destroyPlayer(user);
-		if (!player) return;
-		if (this.onRemovePlayer) this.onRemovePlayer(player);
-		this.removeBits(player, 10, true);
-		player.say("You have left the " + this.name + " " + this.activityType + ".");
-		if (this.getSignupsHtml && this.showSignupsHtml && !this.started && !this.signupsHtmlTimeout) {
-			this.sayUhtmlChange(this.getSignupsHtml(), "signups");
+	removePlayer(user: User | string, silent?: boolean, failedLateJoin?: boolean) {
+		if (this.isMiniGame) return;
+		const player = this.destroyPlayer(user, failedLateJoin);
+		if (this.options.freejoin || !player) return;
+		if (!silent) {
+			if (this.onRemovePlayer) this.onRemovePlayer(player);
+			this.removeBits(player, 10, true);
+			player.say("You have left the " + this.name + " " + this.activityType + ".");
+		}
+		if (this.showSignupsHtml && !this.started) {
+			if (this.signupsHtmlTimeout) clearTimeout(this.signupsHtmlTimeout);
 			this.signupsHtmlTimeout = setTimeout(() => {
+				this.sayUhtmlChange(this.uhtmlBaseName + "-signups", this.getSignupsHtml());
 				this.signupsHtmlTimeout = null;
 			}, SIGNUPS_HTML_DELAY);
 		}
@@ -245,14 +316,14 @@ export class Game extends Activity {
 					this.shinyMascot = false;
 				}
 			}
-			const gif = Dex.getPokemonGif(this.mascot, this.userHosted ? 'back' : 'front');
+			const gif = Dex.getPokemonGif(this.mascot, "xy", this.isUserHosted ? 'back' : 'front');
 			if (gif) html += gif + "&nbsp;&nbsp;&nbsp;";
 		}
 		html += "<b><font size='3'>" + this.nameWithOptions + "</font></b>";
 		html += "<br />" + this.description;
 		let commandDescriptions: string[] = [];
 		if (this.getPlayerSummary) commandDescriptions.push(Config.commandCharacter + "summary");
-		if (this.format.commandDescriptions) commandDescriptions = commandDescriptions.concat(this.format.commandDescriptions);
+		if (this.commandDescriptions) commandDescriptions = commandDescriptions.concat(this.commandDescriptions);
 		if (commandDescriptions.length) {
 			html += "<br /><b>Command" + (commandDescriptions.length > 1 ? "s" : "") + "</b>: " + commandDescriptions.map(x => "<code>" + x + "</code>").join(", ");
 		}
@@ -274,7 +345,8 @@ export class Game extends Activity {
 		if (this.isPm(this.room) || (this.parentGame && !this.parentGame.allowChildGameBits)) return false;
 		if (this.shinyMascot) bits *= 2;
 		Storage.addPoints(this.room, user.name, bits, this.format.id);
-		if (!noPm) user.say("You were awarded " + bits + " bits! To see your total amount, use the command ``" + Config.commandCharacter + "bits " + this.room.id + "``.");
+		if (!noPm) user.say("You were awarded " + bits + " bits! To see your total amount, use the command ``" + Config.commandCharacter + "bits " + this.room.title + "``.");
+		if (!this.awardedBits) this.awardedBits = true;
 		return true;
 	}
 
@@ -282,7 +354,7 @@ export class Game extends Activity {
 		if (this.isPm(this.room) || (this.parentGame && !this.parentGame.allowChildGameBits)) return false;
 		if (this.shinyMascot) bits *= 2;
 		Storage.removePoints(this.room, user.name, bits, this.format.id);
-		if (!noPm) user.say("You lost " + bits + " bits! To see your remaining amount, use the command ``" + Config.commandCharacter + "bits " + this.room.id + "``.");
+		if (!noPm) user.say("You lost " + bits + " bits! To see your remaining amount, use the command ``" + Config.commandCharacter + "bits " + this.room.title + "``.");
 		return true;
 	}
 
@@ -292,6 +364,7 @@ export class Game extends Activity {
 		if (!winnerBits) winnerBits = this.winnerPointsToBits;
 		if (!loserBits) loserBits = this.loserPointsToBits;
 		this.points.forEach((points, player) => {
+			if (points <= 0) return;
 			let winnings = 0;
 			if (this.winners.has(player)) {
 				winnings = Math.floor(winnerBits! * points);
@@ -306,25 +379,42 @@ export class Game extends Activity {
 	rollForShinyPokemon(extraChance?: number): boolean {
 		let chance = 150;
 		if (extraChance) chance -= extraChance;
-		return !Tools.random(chance);
+		return !this.random(chance);
 	}
 
-	shufflePlayers(players?: Dict<Player>): Player[] {
-		if (!players) players = this.players;
-		const list = [];
-		for (const i in players) {
-			list.push(players[i]);
-		}
-		return Tools.shuffle(list);
+	shufflePlayers(players?: PlayerList): Player[] {
+		return this.shuffle(this.getPlayerList(players));
+	}
+
+	getPlayerLives(players?: PlayerList): string {
+		return this.getPlayerAttributes(player => {
+			const wins = this.lives!.get(player) || this.startingLives;
+			return player.name + (wins ? " (" + wins + ")" : "");
+		}, players).join(', ');
+	}
+
+	getPlayerPoints(players?: PlayerList): string {
+		return this.getPlayerAttributes(player => {
+			const points = this.points!.get(player) || this.startingPoints;
+			return player.name + (points ? " (" + points + ")" : "");
+		}, players).join(', ');
+	}
+
+	getPlayerWins(players?: PlayerList): string {
+		return this.getPlayerAttributes(player => {
+			const wins = this.winners.get(player);
+			return player.name + (wins ? " (" + wins + ")" : "");
+		}, players).join(', ');
 	}
 
 	getPlayerSummary?(player: Player): void;
-	/** Return `false` to prevent a user from being added to the game */
-	onAddPlayer?(player: Player): boolean;
+	/** Return `false` to prevent a user from being added to the game (and send the reason to the user) */
+	onAddPlayer?(player: Player, lateJoin?: boolean): boolean | void;
 	onChildEnd?(winners: Map<Player, number>): void;
 	onDeallocate?(): void;
 	onInitialize?(): void;
 	onNextRound?(): void;
 	onRemovePlayer?(player: Player): void;
 	onSignups?(): void;
+	parseChatMessage?(user: User, message: string, isCommand: boolean): void;
 }

@@ -5,8 +5,8 @@ import { Room } from '../../rooms';
 
 export type IPlayingCardSuits = 'clubs' | 'diamonds' | 'hearts' | 'spades';
 export interface IPlayingCard {
-	name: string;
-	suit: IPlayingCardSuits;
+	readonly name: string;
+	readonly suit: IPlayingCardSuits;
 	value: number;
 }
 
@@ -17,20 +17,20 @@ const suitCodes = {
 	'spades': '&spades;',
 };
 
-export class PlayingCard extends Game {
-	playerCards = new Map<Player, IPlayingCard[]>();
-	wagers: Map<Player, number> | null = null;
-	playerTotals = new Map<Player, number>();
+export abstract class PlayingCard extends Game {
+	readonly playerCards = new Map<Player, IPlayingCard[]>();
+	readonly wagers: Map<Player, number> | null = null;
+	readonly playerTotals = new Map<Player, number>();
 	deck: IPlayingCard[] = [];
-	faceCardValues: {J: number, Q: number, K: number, A: number} = {
+	readonly faceCardValues: {J: number, Q: number, K: number, A: number} = {
 		J: 11,
 		Q: 12,
 		K: 13,
 		A: 14,
 	};
-	maxHandTotal: number = 0;
-	startingHandAmount: number = 2;
-	cardHtmlDelimiter: string = "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;";
+	readonly maxHandTotal: number = 0;
+	readonly startingHandAmount: number = 2;
+	readonly cardHtmlDelimiter: string = "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;";
 
 	createDeck() {
 		const deck: IPlayingCard[] = [];
@@ -53,7 +53,7 @@ export class PlayingCard extends Game {
 				deck.push(Object.assign({}, card, {suit: suits[i]}));
 			}
 		}
-		this.deck = Tools.shuffle(deck);
+		this.deck = this.shuffle(deck);
 		return this.deck;
 	}
 
@@ -138,7 +138,7 @@ export class PlayingCard extends Game {
 		}
 
 		html += '</center></div>';
-		player.sayUhtml(html, "hand");
+		player.sayUhtml(html, this.uhtmlBaseName + "-hand");
 	}
 
 	getPlayerSummary(player: Player) {

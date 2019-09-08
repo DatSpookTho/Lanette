@@ -5,23 +5,24 @@ import { IGameFile } from "../types/games";
 import { commands as templateCommands, IPlayingCard, PlayingCard } from './templates/playing-card';
 
 class MurkrowsBlackjack extends PlayingCard {
-	blackjackGame: number = 0;
-	blackJackpots = new Map<Player, number>();
+	readonly blackJackpots = new Map<Player, number>();
 	canHit: boolean = false;
+	canLateJoin: boolean = true;
 	canWager: boolean = true;
 	dealersHand: number = 0;
-	faceCardValues = {
+	readonly faceCardValues = {
 		J: 10,
 		Q: 10,
 		K: 10,
 		A: 11,
 	};
-	maxBlackjackGames: number = 5;
-	maxHandTotal: number = 21;
-	roundActions = new Set<Player>();
-	roundLimit: number = 20;
-	wagerLimit: number = 300;
-	wagers = new Map<Player, number>();
+	readonly maxBlackjackGames: number = 5;
+	readonly maxHandTotal: number = 21;
+	readonly roundActions = new Set<Player>();
+	readonly roundLimit: number = 20;
+	subGameNumber: number = 0;
+	readonly wagerLimit: number = Math.floor((this.maxBits / this.maxBlackjackGames) / 2);
+	readonly wagers = new Map<Player, number>();
 
 	dealersTopCard!: IPlayingCard;
 
@@ -39,7 +40,6 @@ class MurkrowsBlackjack extends PlayingCard {
 	}
 
 	onStart() {
-		this.canWager = false;
 		this.nextBlackJackGame();
 	}
 
@@ -49,9 +49,10 @@ class MurkrowsBlackjack extends PlayingCard {
 
 	startBlackjackGame() {
 		if (this.timeout) clearTimeout(this.timeout);
-		this.blackjackGame++;
+		this.canWager = false;
+		this.subGameNumber++;
 		this.round = 0;
-		if (this.blackjackGame > 1) {
+		if (this.subGameNumber > 1) {
 			this.playerCards.clear();
 			this.playerTotals.clear();
 		}
@@ -76,7 +77,8 @@ class MurkrowsBlackjack extends PlayingCard {
 			}
 			this.dealersHand = total;
 		}
-		this.say("Dealing " + (this.blackjackGame > 1 ? "new " : "") + "cards in PMs!");
+		this.canLateJoin = false;
+		this.say("Dealing " + (this.subGameNumber > 1 ? "new " : "") + "cards in PMs!");
 		for (const i in this.players) {
 			if (this.players[i].eliminated) continue;
 			this.dealCards(this.players[i]);
@@ -89,7 +91,7 @@ class MurkrowsBlackjack extends PlayingCard {
 		for (const i in this.players) {
 			this.players[i].frozen = false;
 		}
-		if (!this.getRemainingPlayerCount() || this.blackjackGame >= this.maxBlackjackGames) return this.end();
+		if (!this.getRemainingPlayerCount() || this.subGameNumber >= this.maxBlackjackGames) return this.end();
 		this.startBlackjackGame();
 	}
 
@@ -112,20 +114,28 @@ class MurkrowsBlackjack extends PlayingCard {
 			}
 		}
 		if (!playersLeft || this.round > this.roundLimit) {
-			this.say("All players have finished their turns!");
-			this.timeout = setTimeout(() => {
-				this.say("Murkrow " + (this.dealersHand < 22 ? "has " : "bust with ") + this.dealersHand + "!");
-				this.timeout = setTimeout(() => this.endBlackjackGame(), 5 * 1000);
-			}, 5000);
+			const text = "All players have finished their turns!";
+			this.on(text, () => {
+				this.canLateJoin = true;
+				this.timeout = setTimeout(() => {
+					const text = "Murkrow " + (this.dealersHand < 22 ? "has " : "bust with ") + this.dealersHand + "!";
+					this.on(text, () => {
+						this.timeout = setTimeout(() => this.endBlackjackGame(), 5 * 1000);
+					});
+					this.say(text);
+				}, 5000);
+			});
+			this.say(text);
 			return;
 		}
 		this.roundActions.clear();
-		const text = "``[Game " + this.blackjackGame + "]`` **Round " + this.round + "**! | Remaining players: " + this.getPlayerNames();
-		this.on(text, () => {
+		const html = this.getRoundHtml(this.getPlayerWins);
+		const uhtmlName = this.uhtmlBaseName + '-round-html';
+		this.onUhtml(uhtmlName, html, () => {
 			this.canHit = true;
 			this.timeout = setTimeout(() => this.nextRound(), 15 * 1000);
 		});
-		this.say(text);
+		this.sayUhtml(uhtmlName, html);
 	}
 
 	endBlackjackGame() {
@@ -136,7 +146,9 @@ class MurkrowsBlackjack extends PlayingCard {
 		for (const i in this.players) {
 			const player = this.players[i];
 			if (player.eliminated) continue;
-			const total = this.playerTotals.get(player) || 0;
+			const total = this.playerTotals.get(player);
+			// late-joins
+			if (!total) continue;
 			if (total > 21) continue;
 			if (total === 21) blackjacks.push(player);
 			if (this.dealersHand > 21 || total >= this.dealersHand) {
@@ -145,6 +157,8 @@ class MurkrowsBlackjack extends PlayingCard {
 				gameWinners.push(player.name);
 			}
 		}
+
+		let text = '';
 		if (gameWinners.length) {
 			if (blackjacks.length) {
 				const blackJackpot = Math.floor(300 / blackjacks.length);
@@ -153,14 +167,17 @@ class MurkrowsBlackjack extends PlayingCard {
 					this.blackJackpots.set(blackjacks[i], previousBlackJackpots + blackJackpot);
 				}
 			}
-			this.say("**Game " + this.blackjackGame + " winner" + (gameWinners.length > 1 ? "s" : "") + "**: " + gameWinners.join(", ") + (blackjacks.length ? " | **BlackJackpot winner" + (blackjacks.length > 1 ? "s" : "") + "**: " + this.getPlayerNames(blackjacks) : ""));
+			text = "**Game " + this.subGameNumber + " winner" + (gameWinners.length > 1 ? "s" : "") + "**: " + gameWinners.join(", ") + (blackjacks.length ? " | **BlackJackpot winner" + (blackjacks.length > 1 ? "s" : "") + "**: " + this.getPlayerNames(blackjacks) : "");
 		} else if (this.dealersHand > 21) {
-			this.say("No one wins Game " + this.blackjackGame + "!");
+			text = "No one wins Game " + this.subGameNumber + "!";
 		} else {
-			this.say("Murkrow wins Game " + this.blackjackGame + "!");
+			text = "Murkrow wins Game " + this.subGameNumber + "!";
 		}
 
-		this.timeout = setTimeout(() => this.nextBlackJackGame(), 5 * 1000);
+		this.on(text, () => {
+			this.timeout = setTimeout(() => this.nextBlackJackGame(), 5 * 1000);
+		});
+		this.say(text);
 	}
 
 	onEnd() {
@@ -251,7 +268,8 @@ const commands: Dict<ICommandDefinition<MurkrowsBlackjack>> = {
 };
 
 export const game: IGameFile<MurkrowsBlackjack> = {
-	aliases: ["murkrows", "bj"],
+	aliases: ["murkrows", "bj", "mb"],
+	battleFrontierCategory: 'Luck',
 	commandDescriptions: [Config.commandCharacter + "hit", Config.commandCharacter + "stay"],
 	commands: Object.assign({}, templateCommands, commands),
 	class: MurkrowsBlackjack,

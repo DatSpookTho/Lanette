@@ -1,19 +1,45 @@
 import fs = require('fs');
 import path = require('path');
-import { Room } from './rooms';
-import { IDatabase } from './types/storage';
 
-const databasesDir = path.resolve(__dirname, '.', '..', 'databases');
+import { Room } from './rooms';
+import { IDatabase, IGlobalDatabase } from './types/storage';
+import { User } from './users';
+
+const MAX_QUEUED_OFFLINE_MESSAGES = 3;
+const LAST_SEEN_EXPIRATION = 30 * 24 * 60 * 60 * 1000;
+const OFFLINE_MESSAGE_EXPIRATION = 30 * 24 * 60 * 60 * 1000;
+
+const globalDatabaseId = 'globalDB';
+const hostingDatabaseSuffix = '-hostingDB';
+const archivedDatabasesDir = path.join(Tools.rootFolder, 'archived-databases');
+const databasesDir = path.join(Tools.rootFolder, 'databases');
+const baseOfflineMessageLength = '[28 Jun 2019, 00:00:00 GMT-0500] **** said: '.length;
 
 export class Storage {
-	databaseCache: Dict<IDatabase> = {};
-	loadedDatabases: boolean = false;
 	chatLogFilePathCache: Dict<string> = {};
 	chatLogRolloverTimes: Dict<number> = {};
+	databases: Dict<IDatabase> = {};
+	lastSeenExpirationDuration = Tools.toDurationString(LAST_SEEN_EXPIRATION);
+	loadedDatabases: boolean = false;
 
-	get databases(): Dict<IDatabase> {
-		if (!this.loadedDatabases) this.importDatabases();
-		return this.databaseCache;
+	globalDatabaseExportInterval: NodeJS.Timer;
+
+	constructor() {
+		this.globalDatabaseExportInterval = this.setGlobalDatabaseExportInterval();
+	}
+
+	onReload(previous: Partial<Storage>) {
+		if (previous.chatLogFilePathCache) this.chatLogFilePathCache = previous.chatLogFilePathCache;
+		if (previous.chatLogRolloverTimes) this.chatLogRolloverTimes = previous.chatLogRolloverTimes;
+		if (previous.databases) this.databases = previous.databases;
+		if (previous.loadedDatabases) this.loadedDatabases = previous.loadedDatabases;
+
+		if (previous.globalDatabaseExportInterval) clearInterval(previous.globalDatabaseExportInterval);
+		this.globalDatabaseExportInterval = this.setGlobalDatabaseExportInterval();
+	}
+
+	setGlobalDatabaseExportInterval(): NodeJS.Timer {
+		return setInterval(() => this.exportDatabase(globalDatabaseId), 15 * 60 * 1000);
 	}
 
 	getDatabase(room: Room): IDatabase {
@@ -21,18 +47,32 @@ export class Storage {
 		return this.databases[room.id];
 	}
 
-	importDatabase(roomid: string) {
-		try {
-			const file = fs.readFileSync(path.join(databasesDir, roomid + '.json')).toString();
-			this.databaseCache[roomid] = JSON.parse(file);
-		} catch (e) {
-			if (e.code !== 'ENOENT') throw e;
-		}
+	getGlobalDatabase(): IGlobalDatabase {
+		if (!(globalDatabaseId in this.databases)) this.databases[globalDatabaseId] = {};
+		return this.databases[globalDatabaseId] as IGlobalDatabase;
+	}
+
+	getHostingDatabase(room: Room): IDatabase {
+		const id = room.id + hostingDatabaseSuffix;
+		if (!(id in this.databases)) this.databases[id] = {};
+		return this.databases[id];
 	}
 
 	exportDatabase(roomid: string) {
-		if (!(roomid in this.databaseCache) || roomid.startsWith('battle-') || roomid.startsWith('groupchat-')) return;
-		fs.writeFileSync(path.join(databasesDir, roomid + '.json'), JSON.stringify(this.databaseCache[roomid]));
+		if (!(roomid in this.databases) || roomid.startsWith('battle-') || roomid.startsWith('groupchat-')) return;
+		const contents = JSON.stringify(this.databases[roomid]);
+		Tools.safeWriteFileSync(path.join(databasesDir, roomid + '.json'), contents);
+	}
+
+	archiveDatabase(roomid: string) {
+		if (!(roomid in this.databases) || roomid.startsWith('battle-') || roomid.startsWith('groupchat-')) return;
+		const date = new Date();
+		const year = date.getFullYear();
+		const month = date.getMonth() + 1;
+		const day = date.getDate();
+		const filename = roomid + '-' + year + '-' + (month < 10 ? '0' : '') + month + '-' + (day < 10 ? '0' : '') + day + '-at-' + Tools.toTimestampString(date).split(' ')[1].split(':').join('-');
+		const contents = JSON.stringify(this.databases[roomid]);
+		Tools.safeWriteFileSync(path.join(archivedDatabasesDir, filename + '.json'), contents);
 	}
 
 	importDatabases() {
@@ -40,18 +80,72 @@ export class Storage {
 
 		const databases = fs.readdirSync(databasesDir);
 		for (let i = 0; i < databases.length; i++) {
-			const file = databases[i];
-			if (!file.endsWith('.json')) continue;
-			this.importDatabase(file.substr(0, file.indexOf('.json')));
+			const fileName = databases[i];
+			if (!fileName.endsWith('.json')) continue;
+			const id = fileName.substr(0, fileName.indexOf('.json'));
+			const file = fs.readFileSync(path.join(databasesDir, fileName)).toString();
+			this.databases[id] = JSON.parse(file);
+		}
+
+		const globalDatabase = this.getGlobalDatabase();
+		if (globalDatabase.lastSeen) {
+			const now = Date.now();
+			for (const i in globalDatabase.lastSeen) {
+				if (now - globalDatabase.lastSeen[i] > LAST_SEEN_EXPIRATION) delete globalDatabase.lastSeen[i];
+			}
 		}
 
 		this.loadedDatabases = true;
 	}
 
 	exportDatabases() {
-		for (const i in this.databaseCache) {
+		for (const i in this.databases) {
 			this.exportDatabase(i);
 		}
+	}
+
+	clearLeaderboard(roomid: string): boolean {
+		if (!(roomid in this.databases) || !this.databases[roomid].leaderboard) return false;
+		this.archiveDatabase(roomid);
+		const date = new Date();
+		const month = date.getMonth() + 1;
+		const day = date.getDate();
+		const clearAnnual = (month === 12 && day === 31) || (month === 1 && day === 1);
+		for (const i in this.databases[roomid].leaderboard) {
+			const user = this.databases[roomid].leaderboard![i];
+			if (clearAnnual) {
+				user.annual = 0;
+			} else {
+				user.annual += user.current;
+			}
+			user.current = 0;
+
+			if (clearAnnual) {
+				user.annualSources = {};
+			} else {
+				for (const source in user.sources) {
+					if (source in user.annualSources) {
+						user.annualSources[source] += user.sources[source];
+					} else {
+						user.annualSources[source] = user.sources[source];
+					}
+				}
+			}
+			user.sources = {};
+		}
+		if (roomid + hostingDatabaseSuffix in this.databases) this.clearLeaderboard(roomid + hostingDatabaseSuffix);
+		this.exportDatabase(roomid);
+		return true;
+	}
+
+	createLeaderboardEntry(database: IDatabase, name: string, id: string) {
+		database.leaderboard![id] = {
+			annual: 0,
+			annualSources: {},
+			current: 0,
+			name,
+			sources: {},
+		};
 	}
 
 	addPoints(room: Room, name: string, amount: number, source: string): void {
@@ -65,13 +159,7 @@ export class Storage {
 		source = Tools.toId(source);
 		if (!source) return;
 		if (!(id in database.leaderboard)) {
-			database.leaderboard[id] = {
-				annual: 0,
-				annualSources: {},
-				current: 0,
-				name,
-				sources: {},
-			};
+			this.createLeaderboardEntry(database, name, id);
 		} else {
 			database.leaderboard[id].name = name;
 		}
@@ -99,6 +187,40 @@ export class Storage {
 		}
 	}
 
+	transferData(roomid: string, source: string, destination: string): boolean {
+		if (!(roomid in this.databases)) return false;
+		const sourceId = Tools.toId(source);
+		const destinationId = Tools.toId(destination);
+		if (!sourceId || !destinationId || sourceId === destinationId) return false;
+		const database = this.databases[roomid];
+		if (database.leaderboard && sourceId in database.leaderboard) {
+			if (!(destinationId in database.leaderboard)) this.createLeaderboardEntry(database, destination, destinationId);
+			for (const source in database.leaderboard[sourceId].sources) {
+				if (source in database.leaderboard[destinationId].sources) {
+					database.leaderboard[destinationId].sources[source] += database.leaderboard[sourceId].sources[source];
+				} else {
+					database.leaderboard[destinationId].sources[source] = database.leaderboard[sourceId].sources[source];
+				}
+				delete database.leaderboard[sourceId].sources[source];
+			}
+			for (const source in database.leaderboard[sourceId].annualSources) {
+				if (source in database.leaderboard[destinationId].annualSources) {
+					database.leaderboard[destinationId].annualSources[source] += database.leaderboard[sourceId].annualSources[source];
+				} else {
+					database.leaderboard[destinationId].annualSources[source] = database.leaderboard[sourceId].annualSources[source];
+				}
+				delete database.leaderboard[sourceId].annualSources[source];
+			}
+			database.leaderboard[destinationId].current += database.leaderboard[sourceId].current;
+			database.leaderboard[sourceId].current = 0;
+			database.leaderboard[destinationId].annual += database.leaderboard[sourceId].annual;
+			database.leaderboard[sourceId].annual = 0;
+		}
+
+		if (roomid + hostingDatabaseSuffix in this.databases) this.transferData(roomid + hostingDatabaseSuffix, source, destination);
+		return true;
+	}
+
 	logChatMessage(room: Room, time: number, messageType: string, message: string) {
 		const date = new Date(time);
 		if (!this.chatLogRolloverTimes[room.id] || time >= this.chatLogRolloverTimes[room.id]) {
@@ -108,7 +230,7 @@ export class Storage {
 			const year = date.getFullYear();
 			const month = date.getMonth() + 1;
 			const day = date.getDate();
-			const directory = path.resolve(__dirname, '.', '..', 'roomlogs', room.id, '' + year);
+			const directory = path.join(Tools.roomLogsFolder, room.id, '' + year);
 			try {
 				fs.mkdirSync(directory, {recursive: true});
 			// tslint:disable-next-line no-empty
@@ -117,5 +239,86 @@ export class Storage {
 			this.chatLogFilePathCache[room.id] = path.join(directory, filename);
 		}
 		fs.appendFileSync(this.chatLogFilePathCache[room.id], Tools.toTimestampString(date).split(" ")[1] + ' |' + messageType + '|' + message + "\n");
+	}
+
+	getMaxOfflineMessageLength(sender: User, message: string): number {
+		return Tools.maxMessageLength - (baseOfflineMessageLength + sender.name.length);
+	}
+
+	storeOfflineMessage(sender: string, recipientId: string, message: string): boolean {
+		const database = this.getGlobalDatabase();
+		if (!database.offlineMessages) database.offlineMessages = {};
+		if (recipientId in database.offlineMessages) {
+			const senderId = Tools.toId(sender);
+			let queuedMessages = 0;
+			for (let i = 0; i < database.offlineMessages[recipientId].length; i++) {
+				if (!database.offlineMessages[recipientId][i].readTime && Tools.toId(database.offlineMessages[recipientId][i].sender) === senderId) queuedMessages++;
+			}
+			if (queuedMessages > MAX_QUEUED_OFFLINE_MESSAGES) return false;
+		} else {
+			database.offlineMessages[recipientId] = [];
+		}
+
+		database.offlineMessages[recipientId].push({
+			message,
+			sender,
+			readTime: 0,
+			sentTime: Date.now(),
+		});
+		return true;
+	}
+
+	retrieveOfflineMessages(user: User, retrieveRead?: boolean): boolean {
+		const database = this.getGlobalDatabase();
+		if (!database.offlineMessages || !(user.id in database.offlineMessages)) return false;
+		const now = Date.now();
+		const expiredTime = now - OFFLINE_MESSAGE_EXPIRATION;
+		let hasExpiredMessages = false;
+		for (let i = 0; i < database.offlineMessages[user.id].length; i++) {
+			const message = database.offlineMessages[user.id][i];
+			if (message.readTime) {
+				if (message.readTime <= expiredTime) {
+					message.expired = true;
+					if (!hasExpiredMessages) hasExpiredMessages = true;
+				}
+				if (!retrieveRead) continue;
+			}
+			const date = new Date(message.sentTime);
+			let dateString = date.toUTCString();
+			dateString = dateString.substr(dateString.indexOf(',') + 1);
+			dateString = dateString.substr(0, dateString.indexOf(':') - 3);
+			let timeString = date.toTimeString();
+			timeString = timeString.substr(0, timeString.indexOf('('));
+			user.say("[" + dateString.trim() + ", " + timeString.trim() + "] " + "**" + message.sender + "** said: " + message.message);
+			message.readTime = now;
+		}
+
+		if (hasExpiredMessages) database.offlineMessages[user.id] = database.offlineMessages[user.id].filter(x => !x.expired);
+
+		return true;
+	}
+
+	clearOfflineMessages(user: User): boolean {
+		const database = this.getGlobalDatabase();
+		if (!database.offlineMessages || !(user.id in database.offlineMessages)) return false;
+		delete database.offlineMessages[user.id];
+		return true;
+	}
+
+	checkBotGreeting(room: Room, user: User, timestamp: number): boolean {
+		const database = this.getDatabase(room);
+		if (!database.botGreetings || !(user.id in database.botGreetings)) return false;
+		if (database.botGreetings[user.id].expiration && timestamp >= database.botGreetings[user.id].expiration!) {
+			delete database.botGreetings[user.id];
+			return false;
+		}
+		room.say(database.botGreetings[user.id].greeting);
+		return true;
+	}
+
+	updateLastSeen(user: User, time: number) {
+		const database = this.getGlobalDatabase();
+		if (!database.lastSeen) database.lastSeen = {};
+		database.lastSeen[user.id] = time;
 	}
 }

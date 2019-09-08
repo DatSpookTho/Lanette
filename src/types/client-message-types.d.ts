@@ -1,4 +1,5 @@
 import { ITournamentEndJSON, ITournamentUpdateJSON } from "../room-tournament";
+import { RoomType } from "../rooms";
 import { IFormat } from "../types/in-game-data-types";
 
 export interface IServerGroup {
@@ -10,7 +11,28 @@ export interface IServerGroup {
 
 export type ServerGroupData = Pick<IServerGroup, Exclude<keyof IServerGroup, "ranking">>;
 
+export interface IUserDetailsResponse {
+	avatar: string;
+	group: string;
+	userid: string;
+}
+
+export interface IRoomInfoResponse {
+	id: string;
+	title: string;
+	type: string;
+	visibility: string;
+	modchat: string | false;
+	modjoin: string | boolean;
+	auth: Dict<string[]>;
+	users: string[];
+}
+
 export interface IClientMessageTypes {
+	/**
+	 * Global messages
+	 */
+
 	/**
 	 * Challenge key ID|challenge
 	 */
@@ -20,62 +42,77 @@ export interface IClientMessageTypes {
 	 * Username|login result
 	 */
 	updateuser: {
-		/** Config.username or Guest### if not logged in */
-		username: string,
+		/** username[@status] */
+		usernameText: string,
 		/** '1' if logged in */
-		loginStatus: string,
+		readonly loginStatus: string,
+	};
+
+	/**
+	 * Query type|response
+	 */
+	queryresponse: {
+		readonly type: 'roominfo' | 'userdetails',
+		/** JSON string */
+		readonly response: string,
 	};
 
 	/**
 	 * Room type
 	 */
 	init: {
-		/** Chat or battle */
-		type: string,
+		/** Chat, battle, or HTML */
+		readonly type: RoomType,
 	};
 
-	/**
-	 * User list
-	 */
-	users: {
-		/** usercount,[rank]user1,[rank]user2, etc. */
-		userlist: string,
-	};
+	deinit: {};
 
 	/**
 	 * Groups list
 	 */
 	customgroups: {
-		groups: ServerGroupData[],
+		readonly groups: ServerGroupData[],
 	};
 
 	/**
-	 * Rank+username
+	 * Chat messages
+	 */
+
+	/**
+	 * User list
+	 */
+	users: {
+		/** usercount,[rank]username[@status],[rank]username[@status], etc. */
+		readonly userlist: string,
+	};
+
+	/**
+	 * Rank+username[@status]
 	 */
 	join: {
-		rank: string,
-		username: string,
+		readonly rank: string,
+		readonly usernameText: string,
 	};
 	j: IClientMessageTypes['join'];
 	J: IClientMessageTypes['join'];
 
 	/**
-	 * Rank+username
+	 * Rank+username[@status]
 	 */
 	leave: {
-		rank: string,
-		username: string,
+		readonly rank: string,
+		readonly usernameText: string,
 	};
 	l: IClientMessageTypes['leave'];
 	L: IClientMessageTypes['leave'];
 
 	/**
-	 * Rank+username|old userid
+	 * Rank+username[@status]|old userid
 	 */
 	name: {
-		rank: string,
-		username: string,
-		oldId: string,
+		readonly rank: string,
+		readonly usernameText: string,
+		readonly oldId: string,
 	};
 	n: IClientMessageTypes['name'];
 	N: IClientMessageTypes['name'];
@@ -85,10 +122,10 @@ export interface IClientMessageTypes {
 	 */
 	chat: {
 		/** Defaults to current time */
-		timestamp: number,
-		rank: string,
-		username: string,
-		message: string,
+		readonly timestamp: number,
+		readonly rank: string,
+		readonly username: string,
+		readonly message: string,
 	};
 	c: IClientMessageTypes['chat'];
 
@@ -101,24 +138,86 @@ export interface IClientMessageTypes {
 	 * Server timestamp
 	 */
 	':': {
-		timestamp: number,
+		readonly timestamp: number,
 	};
 
 	/**
 	 * Rank+username|message
 	 */
 	pm: {
-		rank: string,
-		username: string,
-		recipient: string,
-		message: string,
+		readonly rank: string,
+		readonly username: string,
+		readonly recipient: string,
+		readonly message: string,
 	};
+
+	/**
+	 * Plaintext message
+	 */
+	'': {
+		readonly message: string,
+	};
+
+	/**
+	 * HTML message
+	 */
+	html: {
+		readonly html: string,
+	};
+	raw: IClientMessageTypes['html'];
+
+	/**
+	 * Page HTML
+	 */
+	pagehtml: {
+		readonly html: string,
+	};
+
+	/**
+	 * Name|HTML message
+	 */
+	uhtml: {
+		readonly name: string,
+		readonly html: string,
+	};
+	uhtmlchange: IClientMessageTypes['uhtml'];
+
+	/**
+	 * Chatroom messages
+	 */
 
 	/**
 	 * Message type|(Rest)
 	 */
 	tournament: {
-		type: keyof ITournamentMessageTypes,
+		readonly type: keyof ITournamentMessageTypes,
+	};
+
+	/**
+	 * Battle messages
+	 */
+
+	/**
+	 * Slot|username
+	 */
+	player: {
+		slot: string,
+		username: string,
+	};
+
+	/**
+	 * Slot|size
+	 */
+	teamsize: {
+		slot: string,
+		size: number,
+	};
+
+	/**
+	 * Slot+name
+	 */
+	faint: {
+		details: string,
 	};
 }
 
@@ -127,16 +226,16 @@ export interface ITournamentMessageTypes {
 	 * Format|Generator|Player cap
 	 */
 	create: {
-		format: IFormat,
-		generator: string,
-		playerCap: number,
+		readonly format: IFormat,
+		readonly generator: string,
+		readonly playerCap: number,
 	};
 
 	/**
 	 * Update JSON
 	 */
 	update: {
-		json: ITournamentUpdateJSON,
+		readonly json: ITournamentUpdateJSON,
 	};
 
 	updateEnd: {};
@@ -145,7 +244,7 @@ export interface ITournamentMessageTypes {
 	 * End JSON
 	 */
 	end: {
-		json: ITournamentEndJSON,
+		readonly json: ITournamentEndJSON,
 	};
 
 	forceend: {};
@@ -156,18 +255,39 @@ export interface ITournamentMessageTypes {
 	 * Username
 	 */
 	join: {
-		username: string;
+		readonly username: string;
 	};
 
 	/**
 	 * Username
 	 */
 	leave: {
-		username: string;
+		readonly username: string;
 	};
 
 	/**
 	 * Username
 	 */
 	disqualify: ITournamentMessageTypes['leave'];
+
+	/**
+	 * UsernameA|UsernameB|Roomid
+	 */
+	battlestart: {
+		readonly usernameA: string;
+		readonly usernameB: string;
+		readonly roomid: string;
+	};
+
+	/**
+	 * UsernameA|UsernameB|Result|Score|Recorded|Roomid
+	 */
+	battleend: {
+		readonly usernameA: string;
+		readonly usernameB: string;
+		readonly result: 'win' | 'loss' | 'draw';
+		readonly score: [string, string];
+		readonly recorded: 'success' | 'fail';
+		readonly roomid: string;
+	};
 }

@@ -1,5 +1,17 @@
 exports.BattleFormatLinks = {
+	// User-hosted
+	'catchandevolve': {name: 'Catch and Evolve', aliases: ['c&e', 'catch&evolve', 'cne'], generator: 'https://xfix.github.io/ce/', info: 'http://pstournaments.weebly.com/campe.html', userHosted: true},
+	'tradeandevolve': {name: 'Trade and Evolve', aliases: ['t&e', 'trade&evolve', 'tne'], generator: 'https://xfix.github.io/ce/', info: 'http://pstournaments.weebly.com/te.html', userHosted: true},
+	'survival': {name: 'Survival', aliases: ['survivor'], info: 'http://pastebin.com/uzmLnYDQ', userHosted: true},
+	'hungergames': {name: 'Hunger Games', aliases: ['hg', 'hungergame'], info: 'https://docs.google.com/document/d/1paKwcmmB4upEnnblZadNrDLK4IzyIxeoUSQV8QYgfwc/edit?usp=sharing', desc: 'Players will pair up, choose from the given Pokemon in their district, and try to survive until the end of the tournament. If you defeat another pair, you can choose to swap districts.', userHosted: true},
+	'clashofthegymleaders': {name: 'Clash of the Gym Leaders', aliases: ['clash', 'clashoftheleaders'], info: 'http://pstournaments.weebly.com/clash-of-the-gym-leaders.html', userHosted: true},
+	'samesix': {name: 'Same Six', desc: 'Every player is given the same randomly generated team. Moves, IVs, EVs, natures, etc. can be customized.', userHosted: true},
+	'cloakanddagger': {name: 'Cloak and Dagger', aliases: ['cloak&dagger'], desc: 'Every player is given the same randomly generated Pokemon and adds 5 other Pokemon of their choosing to form a team. Each battle, the first player to have the generated Pokemon faint loses!', userHosted: true},
+	'auction': {name: 'Auction', desc: 'Players will get a budget of 10,000 Pokédollars to spend on Pokémon. The Pokémon to be bid on will be decided by the host beforehand.', userHosted: true},
+	'pokedraft': {name: 'PokéDraft', aliases: ['pokdraft'], info: 'https://docs.google.com/document/d/1NOXcTmdbI42NG3NO8d-7863tBbOSFzXmB1g_zmhXnXc/edit?usp=sharing', desc: 'Players will take turns selecting Pokemon to use in a snake draft. The Pokémon to choose from will be decided by the host beforehand.', userHosted: true},
+
 	// Gen 7
+	'gen7letsgoou': {name: '[Gen 7 Let\'s Go] OU', info: '3644015', teams: '3645829', viability: '3645828'},
 	'gen7anythinggoes': {name: '[Gen 7] Anything Goes', info: 'http://www.smogon.com/dex/sm/formats/ag/', teams: '3587441/#post-7092993', viability: '3591711/#post-7171201'},
 	'gen7ubers': {name: '[Gen 7] Ubers', teams: '3599816', viability: '3623296', roleCompendium: '3589086'},
 	'gen7ou': {name: '[Gen 7] OU', info: 'http://www.smogon.com/dex/sm/formats/ou/', teams: '3638845', viability: '3621329', roleCompendium: '3591882'},
@@ -19,12 +31,13 @@ exports.BattleFormatLinks = {
 	'gen7battlefactory': {name: '[Gen 7] Battle Factory', desc: 'Randomized teams of level-balanced Pokémon with sets that are generated to be competitively viable. Each battle is set in a different tier.'},
 	'gen7vgc2017': {name: '[Gen 7] VGC 2017', info: 'http://www.smogon.com/dex/sm/formats/vgc17/', teams: '3590391', desc: "The Video Game Championship (2017 rules) - Nintendo's official doubles format where you bring 6 pokemon and pick 4 to use."},
 	'gen7vgc2018': {name: '[Gen 7] VGC 2018', viability: '3622041', teams: '3628885', desc: "The Video Game Championship (2018 rules) - Nintendo's official doubles format where you bring 6 pokemon and pick 4 to use."},
+	'gen7vgc2019ultraseries': {name: '[Gen 7] VGC 2019 Ultra Series', viability: '3648031'},
 	'gen7cap': {name: '[Gen 7] Cap', teams: '3593752', viability: '3597893'},
 	'gen7mixandmega': {name: '[Gen 7] Mix and Mega', teams: '3587740/#post-7099555', viability: '3591580/#post-7168836'},
 	'gen7almostanyability': {name: '[Gen 7] Almost Any Ability', teams: '3587901/#post-7103429', viability: '3595753'},
 	'gen7doublesuu': {name: '[Gen 7] Doubles UU', teams: '3598014'},
 	'gen7sketchmons': {name: '[Gen 7] Sketchmons', teams: '3587743/#post-7099675', viability: '3606633/#post-7392050'},
-	'gen71v1': {name: '[Gen 7] 1v1', info: '3587523', teams: '3587523/#post-7094792', viability: '3592842/#post-7188257'},
+	'gen71v1': {name: '[Gen 7] 1v1', info: '3646757', teams: '3646826', viability: '3646758'},
 	'gen7godlygift': {name: '[Gen 7] Godly Gift', teams: '3597618/#post-7259719', viability: '3597618/#post-7259721'},
 	'gen7balancedhackmons': {name: '[Gen 7] Balanced Hackmons', teams: '3587475/#post-7094085'},
 	'gen7stabmons': {name: '[Gen 7] STABmons', teams: '3587949', viability: '3587949/#post-7104490'},
@@ -68,7 +81,7 @@ exports.BattleFormatLinks = {
 
 	// Gen 4
 	'gen4ubers': {name: '[Gen 4] Ubers', genGuide: 'short-dpp-guide.3531283', info: 'http://www.smogon.com/dex/dp/formats/uber', teams: '3580622/#post-6963708'},
-	'gen4ou': {name: '[Gen 4] OU', genGuide: 'short-dpp-guide.3531283', info: 'http://www.smogon.com/dex/dp/formats/ou', viability: '3514029', teams: 'https://pastebin.com/L73Q1mRV'},
+	'gen4ou': {name: '[Gen 4] OU', genGuide: 'short-dpp-guide.3531283', info: 'http://www.smogon.com/dex/dp/formats/ou', viability: '3652538/#post-8186495', teams: 'https://pastebin.com/L73Q1mRV'},
 	'gen4uu': {name: '[Gen 4] UU', genGuide: 'short-dpp-guide.3531283', info: 'http://www.smogon.com/dex/dp/formats/uu', teams: '3576780/#post-6891701'},
 	'gen4pu': {name: '[Gen 4] PU', teams: '3597643/#post-7260264'},
 	'gen4lc': {name: '[Gen 4] LC', genGuide: 'short-dpp-guide.3531283', info: 'http://www.smogon.com/dex/dp/formats/lc', teams: '3554452/#post-6499972'},

@@ -5,12 +5,90 @@ import { RuleTable } from "../dex";
  * Pokemon Showdown - https://github.com/Zarel/Pokemon-Showdown
  */
 
-// tslint:disable-next-line interface-over-type-literal
-type StatsTable = {hp: number, atk: number, def: number, spa: number, spd: number, spe: number};
-type SparseStatsTable = Partial<StatsTable>;
-// tslint:disable-next-line interface-over-type-literal
-type BoostsTable = {atk: number, def: number, spa: number, spd: number, spe: number, accuracy: number, evasion: number};
-type SparseBoostsTable = Partial<BoostsTable>;
+type GenderName = 'M' | 'F' | 'N' | '';
+type StatNameExceptHP = 'atk' | 'def' | 'spa' | 'spd' | 'spe';
+export type StatName = 'hp' | StatNameExceptHP;
+
+interface IStatsTable {
+	hp: number;
+	atk: number;
+	def: number;
+	spa: number;
+	spd: number;
+	spe: number;
+}
+
+interface ISparseStatsTable extends Partial<IStatsTable> {}
+
+interface IBoostsTable {
+	atk: number;
+	def: number;
+	spa: number;
+	spd: number;
+	spe: number;
+	accuracy: number;
+	evasion: number;
+}
+
+interface ISparseBoostsTable extends Partial<IBoostsTable> {}
+
+/**
+ * Describes a possible way to get a pokemon. Is not exhaustive!
+ * sourcesBefore covers all sources that do not have exclusive
+ * moves (like catching wild pokemon).
+ *
+ * First character is a generation number, 1-7.
+ * Second character is a source ID, one of:
+ *
+ * - E = egg, 3rd char+ is the father in gen 2-5, empty in gen 6-7
+ *   because egg moves aren't restricted to fathers anymore
+ * - S = event, 3rd char+ is the index in .eventPokemon
+ * - D = Dream World, only 5D is valid
+ * - V = Virtual Console transfer, only 7V is valid
+ *
+ * Designed to match MoveSource where possible.
+ */
+export type PokemonSource = string;
+
+/**
+ * Keeps track of how a pokemon with a given set might be obtained.
+ *
+ * `sources` is a list of possible PokemonSources, and a nonzero
+ * sourcesBefore means the Pokemon is compatible with all possible
+ * PokemonSources from that gen or earlier.
+ *
+ * `limitedEgg` tracks moves that can only be obtained from an egg with
+ * another father in gen 2-5. If there are multiple such moves,
+ * potential fathers need to be checked to see if they can actually
+ * learn the move combination in question.
+ */
+export interface IPokemonSources {
+	sources: PokemonSource[];
+	sourcesBefore: number;
+	babyOnly?: string;
+	sketchMove?: string;
+	hm?: string;
+	restrictiveMoves?: string[];
+	limitedEgg?: (string | 'self')[];
+	isHidden?: boolean;
+	fastCheck?: true;
+}
+
+interface IEventInfo {
+	generation: number;
+	level?: number;
+	shiny?: boolean | 1;
+	gender?: GenderName;
+	nature?: string;
+	ivs?: ISparseStatsTable;
+	perfectIVs?: number;
+	isHidden?: boolean;
+	abilities?: string[];
+	maxEggMoves?: number;
+	moves?: string[];
+	pokeball?: string;
+	from?: string;
+}
 
 interface IEventMethods {
 	/** Return true to stop the move from being used */
@@ -19,13 +97,13 @@ interface IEventMethods {
 	damageCallback?: (this: any, pokemon: any, target: any) => number | false;
 	durationCallback?: (this: any, target: any, source: any, effect: any | null) => number;
 	onAfterDamage?: (this: any, damage: number, target: any, soruce: any, move: any) => void;
-	onAfterEachBoost?: (this: any, boost: SparseBoostsTable, target: any, source: any) => void;
+	onAfterEachBoost?: (this: any, boost: ISparseBoostsTable, target: any, source: any) => void;
 	onAfterHit?: (this: any, source: any, target: any, move: any) => void;
 	onAfterSetStatus?: (this: any, status: any, target: any, source: any, effect: any) => void;
 	onAfterSubDamage?: (this: any, damage: any, target: any, source: any, move: any) => void;
 	onAfterSwitchInSelf?: (this: any, pokemon: any) => void;
 	onAfterUseItem?: (this: any, item: any, pokemon: any) => void;
-	onAfterBoost?: (this: any, boost: SparseBoostsTable, target: any, source: any, effect: any) => void;
+	onAfterBoost?: (this: any, boost: ISparseBoostsTable, target: any, source: any, effect: any) => void;
 	onAfterMoveSecondarySelf?: (this: any, source: any, target: any, move: any) => void;
 	onAfterMoveSecondary?: (this: any, target: any, source: any, move: any) => void;
 	onAfterMove?: (this: any, pokemon: any, target: any, move: any) => void;
@@ -34,7 +112,7 @@ interface IEventMethods {
 	onAllyBasePower?: (this: any, basePower: number, attacker: any, defender: any, move: any) => void;
 	onAllyModifyAtk?: (this: any, atk: number) => void;
 	onAllyModifySpD?: (this: any, spd: number) => void;
-	onAllyBoost?: (this: any, boost: SparseBoostsTable, target: any, source: any, effect: any) => void;
+	onAllyBoost?: (this: any, boost: ISparseBoostsTable, target: any, source: any, effect: any) => void;
 	onAllySetStatus?: (this: any, status: any, target: any, source: any, effect: any) => void;
 	onAllyTryHitSide?: (this: any, target: any, source: any, move: any) => void;
 	onAllyFaint?: (this: any, target: any) => void;
@@ -50,7 +128,7 @@ interface IEventMethods {
 	onAnyAccuracy?: (this: any, accuracy: number, target: any, source: any, move: any) => void;
 	onAnyTryImmunity?: (this: any, target: any, source: any, move: any) => void;
 	onAnyFaint?: (this: any) => void;
-	onAnyModifyBoost?: (this: any, boosts: SparseBoostsTable, target: any) => void;
+	onAnyModifyBoost?: (this: any, boosts: ISparseBoostsTable, target: any) => void;
 	onAnyDragOut?: (this: any, pokemon: any) => void;
 	onAnySetStatus?: (this: any, status: any, pokemon: any) => void;
 	onAttract?: (this: any, target: any, source: any, effect: any) => void;
@@ -62,7 +140,7 @@ interface IEventMethods {
 	onBeforeSwitchIn?: (this: any, pokemon: any) => void;
 	onBeforeSwitchOut?: (this: any, pokemon: any) => void;
 	onBeforeTurn?: (this: any, pokemon: any) => void;
-	onBoost?: (this: any, boost: SparseBoostsTable, target: any, source: any, effect: any) => void;
+	onBoost?: (this: any, boost: ISparseBoostsTable, target: any, source: any, effect: any) => void;
 	onChargeMove?: (this: any, pokemon: any, target: any, move: any) => void;
 	onCheckShow?: (this: any, pokemon: any) => void;
 	onCopy?: (this: any, pokemon: any) => void;
@@ -94,7 +172,7 @@ interface IEventMethods {
 	onLockMoveTarget?: (this: any) => number;
 	onModifyAccuracy?: (this: any, accuracy: number, target: any, source: any, move: any) => number | void;
 	onModifyAtk?: (this: any, atk: number, attacker: any, defender: any, move: any) => number | void;
-	onModifyBoost?: (this: any, boosts: SparseBoostsTable) => void;
+	onModifyBoost?: (this: any, boosts: ISparseBoostsTable) => void;
 	onModifyCritRatio?: (this: any, critRatio: number, source: any, target: any) => number | void;
 	onModifyDamage?: (this: any, damage: number, source: any, target: any, move: any) => number | void;
 	onModifyDef?: (this: any, def: number, pokemon: any) => number | void;
@@ -153,6 +231,11 @@ interface IEventMethods {
 	onAnyModifyDamagePhase2?: IEventMethods["onAnyModifyDamagePhase1"];
 	onModifyDamagePhase1?: IEventMethods["onAnyModifyDamagePhase1"];
 	onModifyDamagePhase2?: IEventMethods["onAnyModifyDamagePhase1"];
+}
+
+interface ISecondaryEffect {
+	status?: string;
+	volatileStatus?: string;
 }
 
 interface IEffectData extends IEventMethods {
@@ -218,6 +301,7 @@ interface IEffectData extends IEventMethods {
 	onTryPrimaryHitPriority?: number;
 	onTypePriority?: number;
 	recoil?: [number, number];
+	secondary?: ISecondaryEffect | null;
 	shortDesc?: string;
 	status?: string;
 	weather?: string;
@@ -240,12 +324,17 @@ export interface IAbilityCopy extends IAbilityData, IAbilityComputed {}
 export interface IAbility extends DeepReadonly<IAbilityCopy> {}
 
 export interface IFormatData extends IEventMethods {
+	challengeShow: boolean;
+	column: number;
 	effectType: "Format" | "Ruleset" | "Rule" | "ValidatorRule";
 	name: string;
+	mod: string;
+	searchShow: boolean;
+	section: string;
+	tournamentShow: boolean;
 	banlist?: string[];
 	cannotMega?: string[];
 	canUseRandomTeam?: boolean;
-	challengeShow?: boolean;
 	debug?: boolean;
 	defaultLevel?: number;
 	desc?: string;
@@ -253,7 +342,6 @@ export interface IFormatData extends IEventMethods {
 	gameType?: 'singles' | 'doubles' | 'triples' | 'rotation';
 	maxForcedLevel?: number;
 	maxLevel?: number;
-	mod?: string;
 	noChangeAbility?: boolean;
 	noChangeForme?: boolean;
 	onBasePowerPriority?: number;
@@ -267,12 +355,10 @@ export interface IFormatData extends IEventMethods {
 	restrictedMoves?: string[];
 	restrictedStones?: string[];
 	ruleset?: string[];
-	searchShow?: boolean;
 	team?: string;
 	teamLength?: {validate?: [number, number], battle?: number};
 	threads?: string[];
 	timer?: {starting?: number, perTurn?: number, maxPerTurn?: number, maxFirstTurn?: number, timeoutAutoChoose?: boolean, accelerate?: boolean};
-	tournamentShow?: boolean;
 	unbanlist?: string[];
 	checkLearnset?: (this: any, move: any, template: any, lsetData: any, set: any) => {type: string, [k: string]: any} | null;
 	onAfterMega?: (this: any, pokemon: any) => void;
@@ -284,15 +370,19 @@ export interface IFormatData extends IEventMethods {
 	onValidateTeam?: (this: any, team: any[], format: any, teamHas: any) => string[] | void;
 	validateSet?: (this: any, set: any, teamHas: any) => string[] | void;
 	validateTeam?: (this: any, team: any[], removeNicknames: boolean) => string[] | void;
-	section?: string;
-	column?: number;
 }
 
 export interface IFormatLinks {
+	aliases?: string[];
+	desc?: string;
+	generator?: string;
 	info?: string;
 	'info-official'?: string;
 	np?: string;
 	'np-official'?: string;
+	roleCompendium?: string;
+	teams?: string;
+	userHosted?: boolean;
 	viability?: string;
 	'viability-official'?: string;
 }
@@ -423,7 +513,7 @@ export interface IMoveData extends IEffectData {
 	alwaysHit?: boolean;
 	baseMoveType?: string;
 	basePowerModifier?: number;
-	boosts?: SparseBoostsTable | false;
+	boosts?: ISparseBoostsTable | false;
 	breaksProtect?: boolean;
 	contestType?: string;
 	critModifier?: number;
@@ -458,7 +548,7 @@ export interface IMoveData extends IEffectData {
 	ohko?: boolean | string;
 	pressureTarget?: string;
 	pseudoWeather?: string;
-	selfBoost?: {boosts?: SparseBoostsTable};
+	selfBoost?: {boosts?: ISparseBoostsTable};
 	selfdestruct?: string | boolean;
 	selfSwitch?: string | boolean;
 	sideCondition?: string;
@@ -477,7 +567,7 @@ export interface IMoveData extends IEffectData {
 	forceSTAB?: boolean;
 	zMovePower?: number;
 	zMoveEffect?: string;
-	zMoveBoost?: SparseBoostsTable;
+	zMoveBoost?: ISparseBoostsTable;
 }
 
 export interface IMoveComputed {
@@ -499,7 +589,7 @@ type TemplateAbility = {0: string, 1?: string, H?: string, S?: string};
 export interface ITemplateData {
 	effectType: 'Pokemon';
 	abilities: TemplateAbility;
-	baseStats: StatsTable;
+	baseStats: IStatsTable;
 	color: string;
 	eggGroups: string[];
 	heightm: number;
@@ -526,34 +616,6 @@ export interface ILearnset {
 	learnset: Dict<string[]>;
 }
 
-type GenderName = 'M' | 'F' | 'N' | '';
-
-interface IStatsTable {
-	hp: number;
-	atk: number;
-	def: number;
-	spa: number;
-	spd: number;
-	spe: number;
-}
-
-interface ISparseStatsTable extends Partial<IStatsTable> {}
-
-interface IEventInfo {
-	generation: number;
-	level?: number;
-	shiny?: true | 1;
-	gender?: GenderName;
-	nature?: string;
-	ivs?: ISparseStatsTable;
-	perfectIVs?: number;
-	isHidden?: boolean;
-	abilities?: string[];
-	moves?: string[];
-	pokeball?: string;
-	from?: string;
-}
-
 export interface ITemplateFormatsData {
 	battleOnly?: boolean;
 	comboMoves?: string[];
@@ -577,8 +639,10 @@ export interface ITemplateFormatsData {
 }
 
 export interface IPokemonComputed {
+	allPossibleMoves: string[];
 	baseSpecies: string;
 	battleOnly?: boolean;
+	category: string;
 	effectType: "Pokemon";
 	evos: string[];
 	forme: string;
@@ -589,9 +653,10 @@ export interface IPokemonComputed {
 	isPrimal: boolean;
 	name: string;
 	nfe: boolean;
+	pseudoLC: boolean;
 	shiny: boolean;
-	speciesId: string;
 	spriteId: string;
+	tier: string;
 }
 
 export interface IPokemonCopy extends ITemplateData, Partial<ILearnset>, ITemplateFormatsData, IPokemonComputed {
@@ -600,6 +665,7 @@ export interface IPokemonCopy extends ITemplateData, Partial<ILearnset>, ITempla
 	forme: string;
 	gen: number;
 	genderRatio: NonNullable<ITemplateData["genderRatio"]>;
+	tier: string;
 }
 export interface IPokemon extends DeepReadonly<IPokemonCopy> {}
 
@@ -615,14 +681,23 @@ export interface INature {
 	minus?: string;
 }
 
+export interface IGifData {
+	back?: {h: number, w: number};
+	front?: {h: number, w: number};
+}
+
 export interface IDataTable {
 	readonly abilities: Dict<IAbilityData | undefined>;
 	readonly aliases: Dict<string | undefined>;
 	readonly badges: string[];
+	readonly categories: Dict<string | undefined>;
 	readonly characters: string[];
+	readonly colors: Dict<string>;
+	readonly eggGroups: Dict<string>;
 	readonly formats: Dict<(IFormatData & IFormatLinks) | undefined>;
 	readonly formatsData: Dict<ITemplateFormatsData | undefined>;
-	readonly gifData: Dict<{back?: {h: number, w: number}, front?: {h: number, w: number}} | undefined>;
+	readonly gifData: Dict<IGifData | undefined>;
+	readonly gifDataBW: Dict<IGifData | undefined>;
 	readonly items: Dict<IItemData | undefined>;
 	readonly learnsets: Dict<ILearnset | undefined>;
 	readonly moves: Dict<IMoveData | undefined>;
@@ -630,5 +705,5 @@ export interface IDataTable {
 	readonly pokedex: Dict<ITemplateData | undefined>;
 	readonly trainerClasses: string[];
 	readonly typeChart: Dict<ITypeChart | undefined>;
-	readonly types: Dict<string | undefined>;
+	readonly types: Dict<string>;
 }
